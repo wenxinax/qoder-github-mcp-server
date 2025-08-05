@@ -27,7 +27,6 @@ WORKDIR /server
 COPY --from=build /bin/qoder-github-mcp-server .
 
 # 设置入口
-点
 ENTRYPOINT ["/server/qoder-github-mcp-server"]
 
 # 默认命令
