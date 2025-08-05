@@ -1,0 +1,46 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+*.md
+
+# Build artifacts
+qoder-github-mcp-server
+qoder-github-mcp-server-*
+
+# Test files
+test_server.sh
+*_test.go
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.*
+
+# GitHub workflows (we don't need them in the image)
+.github/
+
+# Docker files
+Dockerfile*
+.dockerignore
+
+# Other repositories
+github-mcp-server/
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/

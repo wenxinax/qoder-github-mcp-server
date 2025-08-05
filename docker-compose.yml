@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  qoder-github-mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-unknown}
+        DATE: ${DATE:-unknown}
+    image: qoder-github-mcp-server:latest
+    container_name: qoder-github-mcp-server
+    environment:
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_OWNER=${GITHUB_OWNER}
+      - GITHUB_REPO=${GITHUB_REPO}
+      - QODER_COMMENT_ID=${QODER_COMMENT_ID}
+      - QODER_COMMENT_TYPE=${QODER_COMMENT_TYPE:-issue}
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    # 如果需要网络访问，可以取消注释下面的端口映射
+    # ports:
+    #   - "8080:8080"
+    
+    # 健康检查
+    healthcheck:
+      test: ["/app/qoder-github-mcp-server", "--help"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # 开发环境服务，用于交互式开发
+  qoder-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    image: qoder-github-mcp-server:dev
+    container_name: qoder-github-mcp-server-dev
+    environment:
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_OWNER=${GITHUB_OWNER}
+      - GITHUB_REPO=${GITHUB_REPO}
+      - QODER_COMMENT_ID=${QODER_COMMENT_ID}
+      - QODER_COMMENT_TYPE=${QODER_COMMENT_TYPE:-issue}
+    volumes:
+      - .:/app
+    working_dir: /app
+    stdin_open: true
+    tty: true
+    command: /bin/sh
