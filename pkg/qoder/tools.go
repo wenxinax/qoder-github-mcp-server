@@ -15,16 +15,16 @@ import (
 
 // QoderFixContext holds the context for a one-click Qoder fix
 type QoderFixContext struct {
-	Owner       string `json:"owner"`
-	Repo        string `json:"repo"`
-	PullNumber  int    `json:"pull_number"`
-	Path        string `json:"path"`
-	Line        int    `json:"line,omitempty"`
-	Side        string `json:"side,omitempty"`
-	StartLine   int    `json:"start_line,omitempty"`
-	StartSide   string `json:"start_side,omitempty"`
-	Body        string `json:"body"`
-	SubjectType string `json:"subject_type"`
+	Owner      string `json:"owner"`
+	Repo       string `json:"repo"`
+	PullNumber int    `json:"pull_number"`
+	CommitID   string `json:"commit_id"`
+	Path       string `json:"path"`
+	Line       int    `json:"line,omitempty"`
+	Side       string `json:"side,omitempty"`
+	StartLine  int    `json:"start_line,omitempty"`
+	StartSide  string `json:"start_side,omitempty"`
+	Body       string `json:"body"`
 }
 
 // QoderUpdateComment creates a tool to update a comment (issue or review) with content between Qoder markers
@@ -73,7 +73,7 @@ func QoderUpdateComment(getClient GetClientFn, owner, repo, commentID, commentTy
 // QoderAddCommentToPendingReview creates a tool to add a review comment to a pending review
 func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.ToolHandlerFunc) {
 	toolName := "qoder_add_comment_to_pending_review"
-	description := "Add review comment to the requester's latest pending pull request review"
+	description := "Add review comment to the requester's latest pending pull request review. It automatically finds the latest commit."
 
 	return mcp.NewTool(toolName,
 			mcp.WithDescription(description),
@@ -86,7 +86,6 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 			mcp.WithString("side", mcp.Description("The side of the diff to comment on. LEFT indicates the previous state, RIGHT indicates the new state")),
 			mcp.WithNumber("startLine", mcp.Description("For multi-line comments, the first line of the range that the comment applies to")),
 			mcp.WithString("startSide", mcp.Description("For multi-line comments, the starting side of the diff that the comment applies to. LEFT indicates the previous state, RIGHT indicates the new state")),
-			mcp.WithString("subjectType", mcp.Required(), mcp.Description("The level at which the comment is targeted")),
 		),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			// Extract parameters
@@ -102,7 +101,7 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			pullNumber, err := getRequiredNumberParam(request, "pullNumber")
+			pullNumber, err := getRequiredIntParam(request, "pullNumber")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
@@ -110,15 +109,6 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			subjectType, err := getRequiredStringParam(request, "subjectType")
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-
-			line := getOptionalNumberParam(request, "line")
-			side := request.GetString("side", "")
-			startLine := getOptionalNumberParam(request, "startLine")
-			startSide := request.GetString("startSide", "")
 
 			// Get GitHub client
 			client, err := getClient(ctx)
@@ -126,44 +116,64 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 				return mcp.NewToolResultError(fmt.Sprintf("failed to get GitHub client: %v", err)), nil
 			}
 
-			// Create QoderFixContext
-			fixContext := QoderFixContext{
-				Owner:       owner,
-				Repo:        repo,
-				PullNumber:  pullNumber,
-				Path:        path,
-				Line:        line,
-				Side:        side,
-				StartLine:   startLine,
-				StartSide:   startSide,
-				Body:        body,
-				SubjectType: subjectType,
+			// Automatically get the head commit SHA of the pull request
+			pr, _, err := client.PullRequests.Get(ctx, owner, repo, pullNumber)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get pull request details: %v", err)), nil
+			}
+			commitID := pr.GetHead().GetSHA()
+			if commitID == "" {
+				return mcp.NewToolResultError("could not get head commit SHA from pull request"), nil
 			}
 
-			// Marshal and encode the context
+			// Create QoderFixContext
+			fixContext := QoderFixContext{
+				Owner:      owner,
+				Repo:       repo,
+				PullNumber: pullNumber,
+				CommitID:   commitID,
+				Path:       path,
+				Body:       body,
+			}
+
+			// Create the comment object
+			comment := &github.PullRequestComment{
+				Body:     github.String(""), // Placeholder, will be updated later
+				CommitID: github.String(commitID),
+				Path:     github.String(path),
+			}
+
+			// Add optional parameters to the comment and fixContext objects if they exist
+			if line := request.GetFloat("line", 0); line > 0 {
+				comment.Line = github.Int(int(line))
+				fixContext.Line = int(line)
+			}
+			if side := request.GetString("side", ""); side != "" {
+				comment.Side = github.String(side)
+				fixContext.Side = side
+			}
+			if startLine := request.GetFloat("startLine", 0); startLine > 0 {
+				comment.StartLine = github.Int(int(startLine))
+				fixContext.StartLine = int(startLine)
+			}
+			if startSide := request.GetString("startSide", ""); startSide != "" {
+				comment.StartSide = github.String(startSide)
+				fixContext.StartSide = startSide
+			}
+
+			// Marshal and encode the context for the footer
 			contextJSON, err := json.Marshal(fixContext)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("failed to marshal context: %v", err)), nil
 			}
 			encodedContext := base64.StdEncoding.EncodeToString(contextJSON)
 
-			// Create footer
+			// Create footer and set the full body on the comment
 			footer := fmt.Sprintf(`
 
 ---
 *Powered by Qoder* | [One-Click Qoder Fix](http://localhost:9080/reload-to-qoder?context=%s)`, encodedContext)
-			fullBody := body + footer
-
-			// Create the comment
-			comment := &github.PullRequestComment{
-				Body:        github.String(fullBody),
-				Path:        github.String(path),
-				Line:        github.Int(line),
-				Side:        github.String(side),
-				StartLine:   github.Int(startLine),
-				StartSide:   github.String(startSide),
-				SubjectType: github.String(subjectType),
-			}
+			comment.Body = github.String(body + footer)
 
 			// Find pending review by app login name
 			const appLogin = "qoder-assist[bot]"
@@ -195,16 +205,18 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 			} else {
 				// Create a new pending review with the comment
 				draftComment := &github.DraftReviewComment{
-					Path:      github.String(path),
-					Body:      github.String(fullBody),
-					Line:      github.Int(line),
-					Side:      github.String(side),
-					StartLine: github.Int(startLine),
-					StartSide: github.String(startSide),
+					Path: comment.Path,
+					Body: comment.Body,
+					Line: comment.Line,
+					Side: comment.Side,
+					StartLine: comment.StartLine,
+					StartSide: comment.StartSide,
 				}
+
 				reviewRequest := &github.PullRequestReviewRequest{
 					Event:    github.String("PENDING"),
 					Comments: []*github.DraftReviewComment{draftComment},
+					CommitID: github.String(commitID),
 				}
 				newReview, _, err := client.PullRequests.CreateReview(ctx, owner, repo, pullNumber, reviewRequest)
 				if err != nil {
@@ -326,6 +338,21 @@ func getRequiredStringParam(request mcp.CallToolRequest, paramName string) (stri
 		return "", fmt.Errorf("required parameter '%s' not provided or empty", paramName)
 	}
 	return value, nil
+}
+
+// getRequiredIntParam extracts a required integer parameter from the request
+func getRequiredIntParam(request mcp.CallToolRequest, paramName string) (int, error) {
+	value := request.GetFloat(paramName, 0)
+	if value == 0 {
+		// This is not a robust check, but it's the best we can do with the mcp-go library
+		return 0, fmt.Errorf("required integer parameter '%s' not provided or is zero", paramName)
+	}
+	return int(value), nil
+}
+
+// getOptionalIntParam extracts an optional integer parameter from the request
+func getOptionalIntParam(request mcp.CallToolRequest, paramName string) int {
+	return int(request.GetFloat(paramName, 0))
 }
 
 // getRequiredNumberParam extracts a required number parameter from the request
