@@ -34,8 +34,12 @@ func NewServer(version, token, owner, repo, commentID, commentType string) *serv
 // registerTools registers all available tools with the MCP server
 func registerTools(s *server.MCPServer, getClient GetClientFn, owner, repo, commentID, commentType string) {
 	// Register the comment update tool (supports both issue and review comments)
-	tool, handler := QoderUpdateComment(getClient, owner, repo, commentID, commentType)
-	s.AddTool(tool, handler)
+	updateTool, updateHandler := QoderUpdateComment(getClient, owner, repo, commentID, commentType)
+	s.AddTool(updateTool, updateHandler)
+
+	// Register the add review line comment tool
+	addCommentTool, addCommentHandler := QoderAddCommentToPendingReview(getClient)
+	s.AddTool(addCommentTool, addCommentHandler)
 
 	// Future tools can be added here:
 	// tool2, handler2 := AnotherQoderTool(getClient, ...)
