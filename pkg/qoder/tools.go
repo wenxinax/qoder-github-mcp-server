@@ -165,10 +165,10 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 				SubjectType: github.String(subjectType),
 			}
 
-			// Get the current authenticated user
-			user, _, err := client.Users.Get(ctx, "")
+			// Get the current authenticated app
+			app, _, err := client.Apps.Get(ctx, "")
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("failed to get current user: %v", err)), nil
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get current app: %v", err)), nil
 			}
 
 			// Find pending review
@@ -179,7 +179,7 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 
 			var pendingReviewID int64
 			for _, review := range reviews {
-				if review.GetState() == "PENDING" && review.User != nil && review.User.GetID() == user.GetID() {
+				if review.GetState() == "PENDING" && review.User != nil && review.User.GetID() == app.GetID() {
 					pendingReviewID = review.GetID()
 					break
 				}
