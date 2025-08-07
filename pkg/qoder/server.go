@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/go-github/v73/github"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/shurcooL/githubv4"
 	"golang.org/x/oauth2"
 )
 
@@ -25,26 +26,31 @@ func NewServer(version, token, owner, repo, commentID, commentType string) *serv
 		return github.NewClient(tc), nil
 	}
 
+	getGQLClient := func(ctx context.Context) (*githubv4.Client, error) {
+		ts := oauth2.StaticTokenSource(
+			&oauth2.Token{AccessToken: token},
+		)
+		tc := oauth2.NewClient(ctx, ts)
+		return githubv4.NewClient(tc), nil
+	}
+
 	// Register tools
-	registerTools(s, getClient, owner, repo, commentID, commentType)
+	registerTools(s, getClient, getGQLClient, owner, repo, commentID, commentType)
 
 	return s
 }
 
 // registerTools registers all available tools with the MCP server
-func registerTools(s *server.MCPServer, getClient GetClientFn, owner, repo, commentID, commentType string) {
+func registerTools(s *server.MCPServer, getClient GetClientFn, getGQLClient GetGQLClientFn, owner, repo, commentID, commentType string) {
 	// Register the comment update tool (supports both issue and review comments)
 	updateTool, updateHandler := QoderUpdateComment(getClient, owner, repo, commentID, commentType)
 	s.AddTool(updateTool, updateHandler)
 
 	// Register the add review line comment tool
-	addCommentTool, addCommentHandler := QoderAddCommentToPendingReview(getClient)
+	addCommentTool, addCommentHandler := QoderAddCommentToPendingReview(getClient, getGQLClient)
 	s.AddTool(addCommentTool, addCommentHandler)
 
 	// Future tools can be added here:
 	// tool2, handler2 := AnotherQoderTool(getClient, ...)
 	// s.AddTool(tool2, handler2)
 }
-
-// GetClientFn is a function type for getting a GitHub client
-type GetClientFn func(context.Context) (*github.Client, error)
