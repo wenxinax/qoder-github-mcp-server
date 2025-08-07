@@ -20,8 +20,8 @@ type QoderFixContext struct {
 	PullNumber int    `json:"pull_number"`
 	CommitID   string `json:"commit_id"`
 	Path       string `json:"path"`
-	Line       int    `json:"line,omitempty"`
-	Side       string `json:"side,omitempty"`
+	Line       int    `json:"line"`
+	Side       string `json:"side"`
 	StartLine  int    `json:"start_line,omitempty"`
 	StartSide  string `json:"start_side,omitempty"`
 	Body       string `json:"body"`
@@ -78,18 +78,22 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 	return mcp.NewTool(toolName,
 			mcp.WithDescription(description),
 			mcp.WithString("body", mcp.Required(), mcp.Description("The text of the review comment")),
-			mcp.WithNumber("line", mcp.Description("The line of the blob in the pull request diff that the comment applies to. For multi-line comments, the last line of the range")),
+			mcp.WithNumber("line", mcp.Required(), mcp.Description("The line of the blob in the pull request diff that the comment applies to")),
 			mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
 			mcp.WithString("path", mcp.Required(), mcp.Description("The relative path to the file that necessitates a comment")),
 			mcp.WithNumber("pullNumber", mcp.Required(), mcp.Description("Pull request number")),
 			mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
-			mcp.WithString("side", mcp.Description("The side of the diff to comment on. LEFT indicates the previous state, RIGHT indicates the new state")),
+			mcp.WithString("side", mcp.Required(), mcp.Description("The side of the diff to comment on. Can be LEFT or RIGHT")),
 			mcp.WithNumber("startLine", mcp.Description("For multi-line comments, the first line of the range that the comment applies to")),
-			mcp.WithString("startSide", mcp.Description("For multi-line comments, the starting side of the diff that the comment applies to. LEFT indicates the previous state, RIGHT indicates the new state")),
+			mcp.WithString("startSide", mcp.Description("For multi-line comments, the starting side of the diff that the comment applies to. Can be LEFT or RIGHT")),
 		),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			// Extract parameters
+			// Extract required parameters
 			body, err := getRequiredStringParam(request, "body")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			line, err := getRequiredIntParam(request, "line")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
@@ -106,6 +110,10 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			repo, err := getRequiredStringParam(request, "repo")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			side, err := getRequiredStringParam(request, "side")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
@@ -126,39 +134,26 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 				return mcp.NewToolResultError("could not get head commit SHA from pull request"), nil
 			}
 
-			// Create QoderFixContext
+			// Create QoderFixContext for the footer link
 			fixContext := QoderFixContext{
 				Owner:      owner,
 				Repo:       repo,
 				PullNumber: pullNumber,
 				CommitID:   commitID,
 				Path:       path,
+				Line:       line,
+				Side:       side,
 				Body:       body,
 			}
 
-			// Create the comment object
-			comment := &github.PullRequestComment{
-				Body:     github.String(""), // Placeholder, will be updated later
-				CommitID: github.String(commitID),
-				Path:     github.String(path),
-			}
-
-			// Add optional parameters to the comment and fixContext objects if they exist
-			if line := request.GetFloat("line", 0); line > 0 {
-				comment.Line = github.Int(int(line))
-				fixContext.Line = int(line)
-			}
-			if side := request.GetString("side", ""); side != "" {
-				comment.Side = github.String(side)
-				fixContext.Side = side
-			}
+			// Add optional multi-line parameters to the context
 			if startLine := request.GetFloat("startLine", 0); startLine > 0 {
-				comment.StartLine = github.Int(int(startLine))
 				fixContext.StartLine = int(startLine)
-			}
-			if startSide := request.GetString("startSide", ""); startSide != "" {
-				comment.StartSide = github.String(startSide)
-				fixContext.StartSide = startSide
+				if startSide := request.GetString("startSide", ""); startSide != "" {
+					fixContext.StartSide = startSide
+				} else {
+					fixContext.StartSide = side // Default to the same side
+				}
 			}
 
 			// Marshal and encode the context for the footer
@@ -167,13 +162,11 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 				return mcp.NewToolResultError(fmt.Sprintf("failed to marshal context: %v", err)), nil
 			}
 			encodedContext := base64.StdEncoding.EncodeToString(contextJSON)
-
-			// Create footer and set the full body on the comment
 			footer := fmt.Sprintf(`
 
 ---
 *Powered by Qoder* | [One-Click Qoder Fix](http://localhost:9080/reload-to-qoder?context=%s)`, encodedContext)
-			comment.Body = github.String(body + footer)
+			fullBody := body + footer
 
 			// Find pending review by app login name
 			const appLogin = "qoder-assist[bot]"
@@ -191,8 +184,20 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 			}
 
 			if pendingReviewID != 0 {
-				// Add comment to existing pending review
-				comment.PullRequestReviewID = github.Int64(pendingReviewID)
+				// CASE 1: A pending review already exists. Add a comment to it.
+				comment := &github.PullRequestComment{
+					Body:                github.String(fullBody),
+					CommitID:            github.String(commitID),
+					Path:                github.String(path),
+					Line:                github.Int(line),
+					Side:                github.String(side),
+					PullRequestReviewID: github.Int64(pendingReviewID),
+				}
+				if fixContext.StartLine > 0 {
+					comment.StartLine = github.Int(fixContext.StartLine)
+					comment.StartSide = github.String(fixContext.StartSide)
+				}
+
 				createdComment, _, err := client.PullRequests.CreateComment(ctx, owner, repo, pullNumber, comment)
 				if err != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("failed to create review comment: %v", err)), nil
@@ -203,14 +208,16 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 				}
 				return mcp.NewToolResultText(string(result)), nil
 			} else {
-				// Create a new pending review with the comment
+				// CASE 2: No pending review exists. Create a new one with this comment.
 				draftComment := &github.DraftReviewComment{
-					Path: comment.Path,
-					Body: comment.Body,
-					Line: comment.Line,
-					Side: comment.Side,
-					StartLine: comment.StartLine,
-					StartSide: comment.StartSide,
+					Path: github.String(path),
+					Body: github.String(fullBody),
+					Line: github.Int(line),
+					Side: github.String(side),
+				}
+				if fixContext.StartLine > 0 {
+					draftComment.StartLine = github.Int(fixContext.StartLine)
+					draftComment.StartSide = github.String(fixContext.StartSide)
 				}
 
 				reviewRequest := &github.PullRequestReviewRequest{
