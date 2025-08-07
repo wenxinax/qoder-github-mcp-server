@@ -78,22 +78,19 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 	return mcp.NewTool(toolName,
 			mcp.WithDescription(description),
 			mcp.WithString("body", mcp.Required(), mcp.Description("The text of the review comment")),
-			mcp.WithNumber("line", mcp.Required(), mcp.Description("The line of the blob in the pull request diff that the comment applies to")),
 			mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
 			mcp.WithString("path", mcp.Required(), mcp.Description("The relative path to the file that necessitates a comment")),
 			mcp.WithNumber("pullNumber", mcp.Required(), mcp.Description("Pull request number")),
 			mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
-			mcp.WithString("side", mcp.Required(), mcp.Description("The side of the diff to comment on. Can be LEFT or RIGHT")),
+			mcp.WithString("subjectType", mcp.Required(), mcp.Description("The level at which the comment is targeted"), mcp.Enum("FILE", "LINE")),
+			mcp.WithNumber("line", mcp.Description("The line of the blob in the pull request diff that the comment applies to. For multi-line comments, the last line of the range")),
+			mcp.WithString("side", mcp.Description("The side of the diff to comment on. LEFT indicates the previous state, RIGHT indicates the new state"), mcp.Enum("LEFT", "RIGHT")),
 			mcp.WithNumber("startLine", mcp.Description("For multi-line comments, the first line of the range that the comment applies to")),
-			mcp.WithString("startSide", mcp.Description("For multi-line comments, the starting side of the diff that the comment applies to. Can be LEFT or RIGHT")),
+			mcp.WithString("startSide", mcp.Description("For multi-line comments, the starting side of the diff that the comment applies to. LEFT indicates the previous state, RIGHT indicates the new state"), mcp.Enum("LEFT", "RIGHT")),
 		),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			// Extract required parameters
 			body, err := getRequiredStringParam(request, "body")
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			line, err := getRequiredIntParam(request, "line")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
@@ -113,9 +110,25 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			side, err := getRequiredStringParam(request, "side")
+			subjectType, err := getRequiredStringParam(request, "subjectType")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
+			}
+			
+			// Extract optional parameters based on subject type
+			var line int
+			var side string
+			if subjectType == "LINE" {
+				if lineVal := request.GetFloat("line", 0); lineVal > 0 {
+					line = int(lineVal)
+				} else {
+					return mcp.NewToolResultError("line parameter is required when subjectType is LINE"), nil
+				}
+				
+				side = request.GetString("side", "")
+				if side == "" {
+					return mcp.NewToolResultError("side parameter is required when subjectType is LINE"), nil
+				}
 			}
 
 			// Get GitHub client
@@ -185,17 +198,30 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 
 			if pendingReviewID != 0 {
 				// CASE 1: A pending review already exists. Add a comment to it.
-				comment := &github.PullRequestComment{
-					Body:                github.String(fullBody),
-					CommitID:            github.String(commitID),
-					Path:                github.String(path),
-					Line:                github.Int(line),
-					Side:                github.String(side),
-					PullRequestReviewID: github.Int64(pendingReviewID),
+				// For adding comments to existing reviews, we cannot use certain fields like PullRequestReviewID
+				// We need to create a new review comment directly
+				if subjectType == "FILE" {
+					// For file-level comments, we cannot use the REST API CreateComment
+					// We need to use a different approach or return an error
+					return mcp.NewToolResultError("FILE-level comments cannot be added to existing pending reviews via REST API"), nil
 				}
-				if fixContext.StartLine > 0 {
-					comment.StartLine = github.Int(fixContext.StartLine)
-					comment.StartSide = github.String(fixContext.StartSide)
+				
+				comment := &github.PullRequestComment{
+					Body:     github.String(fullBody),
+					CommitID: github.String(commitID),
+					Path:     github.String(path),
+				}
+				
+				// Only add line/side for LINE-level comments
+				if subjectType == "LINE" {
+					comment.Line = github.Int(line)
+					comment.Side = github.String(side)
+					
+					// Add multi-line support if provided
+					if fixContext.StartLine > 0 {
+						comment.StartLine = github.Int(fixContext.StartLine)
+						comment.StartSide = github.String(fixContext.StartSide)
+					}
 				}
 
 				createdComment, _, err := client.PullRequests.CreateComment(ctx, owner, repo, pullNumber, comment)
@@ -212,12 +238,18 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 				draftComment := &github.DraftReviewComment{
 					Path: github.String(path),
 					Body: github.String(fullBody),
-					Line: github.Int(line),
-					Side: github.String(side),
 				}
-				if fixContext.StartLine > 0 {
-					draftComment.StartLine = github.Int(fixContext.StartLine)
-					draftComment.StartSide = github.String(fixContext.StartSide)
+				
+				// Only add line/side for LINE-level comments
+				if subjectType == "LINE" {
+					draftComment.Line = github.Int(line)
+					draftComment.Side = github.String(side)
+					
+					// Add multi-line support if provided
+					if fixContext.StartLine > 0 {
+						draftComment.StartLine = github.Int(fixContext.StartLine)
+						draftComment.StartSide = github.String(fixContext.StartSide)
+					}
 				}
 
 				reviewRequest := &github.PullRequestReviewRequest{
