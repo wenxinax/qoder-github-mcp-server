@@ -165,13 +165,8 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 				SubjectType: github.String(subjectType),
 			}
 
-			// Get the current authenticated app
-			app, _, err := client.Apps.Get(ctx, "")
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("failed to get current app: %v", err)), nil
-			}
-
-			// Find pending review
+			// Find pending review by app login name
+			const appLogin = "qoder-assist[bot]"
 			reviews, _, err := client.PullRequests.ListReviews(ctx, owner, repo, pullNumber, nil)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("failed to list reviews: %v", err)), nil
@@ -179,7 +174,7 @@ func QoderAddCommentToPendingReview(getClient GetClientFn) (mcp.Tool, server.Too
 
 			var pendingReviewID int64
 			for _, review := range reviews {
-				if review.GetState() == "PENDING" && review.User != nil && review.User.GetID() == app.GetID() {
+				if review.GetState() == "PENDING" && review.User != nil && review.User.GetLogin() == appLogin {
 					pendingReviewID = review.GetID()
 					break
 				}
