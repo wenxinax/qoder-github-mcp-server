@@ -37,16 +37,16 @@ type QoderFixContext struct {
 
 // QoderUpdateComment creates a tool to update a comment (issue or review) with content between Qoder markers
 func QoderUpdateComment(getClient GetClientFn, owner, repo, commentID, commentType string) (mcp.Tool, server.ToolHandlerFunc) {
-	toolName := "qoder_update_comment"
+	toolName := "update_comment"
 	description := fmt.Sprintf("Update a %s comment by replacing content between <!-- QODER_BODY_START --> and <!-- QODER_BODY_END --> markers.", commentType)
 
 	return mcp.NewTool(toolName,
-		mcp.WithDescription(description),
-		mcp.WithString("new_content",
-			mcp.Required(),
-			mcp.Description("New content to replace between the Qoder markers"),
+			mcp.WithDescription(description),
+			mcp.WithString("new_content",
+				mcp.Required(),
+				mcp.Description("New content to replace between the Qoder markers"),
+			),
 		),
-	),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			// Extract parameters
 			newContent, err := getRequiredStringParam(request, "new_content")
@@ -80,22 +80,22 @@ func QoderUpdateComment(getClient GetClientFn, owner, repo, commentID, commentTy
 
 // QoderAddCommentToPendingReview creates a tool to add a review comment to a pending review
 func QoderAddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLClientFn) (mcp.Tool, server.ToolHandlerFunc) {
-	toolName := "qoder_add_comment_to_pending_review"
+	toolName := "add_comment_to_pending_review"
 	description := "Add review comment to the requester's latest pending pull request review. It automatically finds the latest commit."
 
 	return mcp.NewTool(toolName,
-		mcp.WithDescription(description),
-		mcp.WithString("body", mcp.Required(), mcp.Description("The text of the review comment")),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("path", mcp.Required(), mcp.Description("The relative path to the file that necessitates a comment")),
-		mcp.WithNumber("pullNumber", mcp.Required(), mcp.Description("Pull request number")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
-		mcp.WithString("subjectType", mcp.Required(), mcp.Description("The level at which the comment is targeted"), mcp.Enum("FILE", "LINE")),
-		mcp.WithNumber("line", mcp.Description("The line of the blob in the pull request diff that the comment applies to. For multi-line comments, the last line of the range")),
-		mcp.WithString("side", mcp.Description("The side of the diff to comment on. LEFT indicates the previous state, RIGHT indicates the new state"), mcp.Enum("LEFT", "RIGHT")),
-		mcp.WithNumber("startLine", mcp.Description("For multi-line comments, the first line of the range that the comment applies to")),
-		mcp.WithString("startSide", mcp.Description("For multi-line comments, the starting side of the diff that the comment applies to. LEFT indicates the previous state, RIGHT indicates the new state"), mcp.Enum("LEFT", "RIGHT")),
-	),
+			mcp.WithDescription(description),
+			mcp.WithString("body", mcp.Required(), mcp.Description("The text of the review comment")),
+			mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
+			mcp.WithString("path", mcp.Required(), mcp.Description("The relative path to the file that necessitates a comment")),
+			mcp.WithNumber("pullNumber", mcp.Required(), mcp.Description("Pull request number")),
+			mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+			mcp.WithString("subjectType", mcp.Required(), mcp.Description("The level at which the comment is targeted"), mcp.Enum("FILE", "LINE")),
+			mcp.WithNumber("line", mcp.Description("The line of the blob in the pull request diff that the comment applies to. For multi-line comments, the last line of the range")),
+			mcp.WithString("side", mcp.Description("The side of the diff to comment on. LEFT indicates the previous state, RIGHT indicates the new state"), mcp.Enum("LEFT", "RIGHT")),
+			mcp.WithNumber("startLine", mcp.Description("For multi-line comments, the first line of the range that the comment applies to")),
+			mcp.WithString("startSide", mcp.Description("For multi-line comments, the starting side of the diff that the comment applies to. LEFT indicates the previous state, RIGHT indicates the new state"), mcp.Enum("LEFT", "RIGHT")),
+		),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params struct {
 				Owner       string
@@ -193,7 +193,6 @@ func QoderAddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLCl
 				fixContext.StartSide = *params.StartSide
 			}
 
-
 			// Marshal and encode the context for the footer
 			contextJSON, err := json.Marshal(fixContext)
 			if err != nil {
@@ -270,7 +269,7 @@ func updateIssueComment(ctx context.Context, client *github.Client, owner, repo 
 
 	// Return the updated comment as JSON
 	result, err := json.Marshal(updatedComment)
-		if err != nil {
+	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
 	}
 
@@ -307,7 +306,7 @@ func updateReviewComment(ctx context.Context, client *github.Client, owner, repo
 
 	// Return the updated comment as JSON
 	result, err := json.Marshal(updatedComment)
-		if err != nil {
+	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
 	}
 
