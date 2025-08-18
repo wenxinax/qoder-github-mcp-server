@@ -50,6 +50,10 @@ func registerTools(s *server.MCPServer, getClient GetClientFn, getGQLClient GetG
 	addCommentTool, addCommentHandler := QoderAddCommentToPendingReview(getClient, getGQLClient)
 	s.AddTool(addCommentTool, addCommentHandler)
 
+	// Register the get PR diff tool
+	getPRDiffTool, getPRDiffHandler := QoderGetPRDiff(getClient, owner, repo)
+	s.AddTool(getPRDiffTool, getPRDiffHandler)
+
 	// Future tools can be added here:
 	// tool2, handler2 := AnotherQoderTool(getClient, ...)
 	// s.AddTool(tool2, handler2)

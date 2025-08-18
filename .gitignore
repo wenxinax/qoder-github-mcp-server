@@ -44,3 +44,7 @@ qoder-github-mcp-server-*
 
 # Logs
 *.log
+
+vendor
+
+github-mcp-server

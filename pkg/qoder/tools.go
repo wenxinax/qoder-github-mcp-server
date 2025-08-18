@@ -405,3 +405,171 @@ func newGQLIntPtr(i *int32) *githubv4.Int {
 func NewGitHubGraphQLErrorResponse(ctx context.Context, message string, err error) *mcp.CallToolResult {
 	return mcp.NewToolResultError(fmt.Sprintf("%s: %v", message, err))
 }
+
+// QoderGetPRDiff creates a tool to get PR diff with enhanced line numbers
+func QoderGetPRDiff(getClient GetClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
+	toolName := "get_pr_diff"
+	description := "Get pull request diff with line numbers showing the latest file state. New lines and context lines show their line numbers, deleted lines don't."
+
+	return mcp.NewTool(toolName,
+			mcp.WithDescription(description),
+			mcp.WithNumber("pull_number",
+				mcp.Required(),
+				mcp.Description("Pull request number"),
+			),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			// Extract parameters
+			pullNumber, err := getRequiredNumberParam(request, "pull_number")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			// Get GitHub client
+			client, err := getClient(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get GitHub client: %v", err)), nil
+			}
+
+			// Get raw diff from GitHub API
+			rawDiff, _, err := client.PullRequests.GetRaw(
+				ctx,
+				owner,
+				repo,
+				pullNumber,
+				github.RawOptions{Type: github.Diff},
+			)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get PR diff: %v", err)), nil
+			}
+
+			// Add line numbers to the diff to show the latest file state
+			enhancedDiff, err := addLineNumbersToNewLines(string(rawDiff))
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to enhance diff: %v", err)), nil
+			}
+
+			// Return the enhanced diff as text
+			return mcp.NewToolResultText(enhancedDiff), nil
+		}
+}
+
+// addLineNumbersToNewLines adds line numbers to new lines and context lines in diff
+func addLineNumbersToNewLines(diffContent string) (string, error) {
+	lines := strings.Split(diffContent, "\n")
+	var result []string
+	newLineNum := 0
+	inChunk := false
+
+	for _, line := range lines {
+		// Check if this is a chunk header
+		if strings.HasPrefix(line, "@@") {
+			// Parse the chunk header to get starting line numbers
+			_, _, newStart, _, err := parseChunkHeader(line)
+			if err != nil {
+				// If parsing fails, just use the line as-is
+				result = append(result, line)
+				continue
+			}
+			newLineNum = newStart
+			inChunk = true
+			result = append(result, line)
+			continue
+		}
+
+		// If we're not in a chunk yet, just add the line as-is
+		if !inChunk {
+			result = append(result, line)
+			continue
+		}
+
+		// Process lines within chunks
+		if len(line) == 0 {
+			// Empty line - treat as context
+			newLineNum++
+			result = append(result, line)
+		} else if line[0] == '+' {
+			// Added line - format: "lineNumber +content"
+			enhancedLine := fmt.Sprintf("%d +%s", newLineNum, line[1:])
+			newLineNum++
+			result = append(result, enhancedLine)
+		} else if line[0] == '-' {
+			// Removed line - format: "   -content" (no line number)
+			enhancedLine := fmt.Sprintf("   -%s", line[1:])
+			result = append(result, enhancedLine)
+		} else if line[0] == ' ' {
+			// Context line - format: "lineNumber  content" (with line number, no +/-)
+			enhancedLine := fmt.Sprintf("%d  %s", newLineNum, line[1:])
+			newLineNum++
+			result = append(result, enhancedLine)
+		} else {
+			// Other lines (like file headers) - reset chunk state
+			if strings.HasPrefix(line, "diff --git") {
+				inChunk = false
+			}
+			result = append(result, line)
+		}
+	}
+
+	return strings.Join(result, "\n"), nil
+}
+
+// parseChunkHeader parses a chunk header like "@@ -1,4 +1,6 @@"
+func parseChunkHeader(header string) (oldStart, oldLines, newStart, newLines int, err error) {
+	// Remove @@ at the beginning and end
+	header = strings.Trim(header, "@ ")
+	parts := strings.Fields(header)
+	if len(parts) < 2 {
+		return 0, 0, 0, 0, fmt.Errorf("invalid chunk header format")
+	}
+
+	// Parse old range: -start,count
+	oldPart := parts[0]
+	if !strings.HasPrefix(oldPart, "-") {
+		return 0, 0, 0, 0, fmt.Errorf("invalid old range format")
+	}
+	oldPart = oldPart[1:] // Remove -
+	if strings.Contains(oldPart, ",") {
+		oldRange := strings.Split(oldPart, ",")
+		oldStart, err = strconv.Atoi(oldRange[0])
+		if err != nil {
+			return 0, 0, 0, 0, err
+		}
+		oldLines, err = strconv.Atoi(oldRange[1])
+		if err != nil {
+			return 0, 0, 0, 0, err
+		}
+	} else {
+		oldStart, err = strconv.Atoi(oldPart)
+		if err != nil {
+			return 0, 0, 0, 0, err
+		}
+		oldLines = 1
+	}
+
+	// Parse new range: +start,count
+	newPart := parts[1]
+	if !strings.HasPrefix(newPart, "+") {
+		return 0, 0, 0, 0, fmt.Errorf("invalid new range format")
+	}
+	newPart = newPart[1:] // Remove +
+	if strings.Contains(newPart, ",") {
+		newRange := strings.Split(newPart, ",")
+		newStart, err = strconv.Atoi(newRange[0])
+		if err != nil {
+			return 0, 0, 0, 0, err
+		}
+		newLines, err = strconv.Atoi(newRange[1])
+		if err != nil {
+			return 0, 0, 0, 0, err
+		}
+	} else {
+		newStart, err = strconv.Atoi(newPart)
+		if err != nil {
+			return 0, 0, 0, 0, err
+		}
+		newLines = 1
+	}
+
+	return oldStart, oldLines, newStart, newLines, nil
+}
