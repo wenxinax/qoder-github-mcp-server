@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -409,7 +410,7 @@ func NewGitHubGraphQLErrorResponse(ctx context.Context, message string, err erro
 // QoderGetPRDiff creates a tool to get PR diff with enhanced line numbers
 func QoderGetPRDiff(getClient GetClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
 	toolName := "get_pr_diff"
-	description := "Get pull request diff with line numbers showing the latest file state. New lines and context lines show their line numbers, deleted lines don't."
+	description := "Get pull request diff with line numbers showing the latest file state. New lines and context lines show their line numbers, deleted lines don't. Automatically applies compression strategies to reduce diff size when needed."
 
 	return mcp.NewTool(toolName,
 			mcp.WithDescription(description),
@@ -449,7 +450,23 @@ func QoderGetPRDiff(getClient GetClientFn, owner, repo string) (mcp.Tool, server
 				return mcp.NewToolResultError(fmt.Sprintf("failed to enhance diff: %v", err)), nil
 			}
 
-			// Return the enhanced diff as text
+			// Check if compression is enabled (default: true)
+			compressEnabled := true
+			if envVal := os.Getenv("PR_DIFF_COMPRESS_ENABLED"); envVal == "false" {
+				compressEnabled = false
+			}
+
+			// Apply compression if enabled
+			if compressEnabled {
+				compressor := NewDiffCompressor()
+				compressedDiff, err := compressor.CompressDiff(enhancedDiff)
+				if err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("failed to compress diff: %v", err)), nil
+				}
+				return mcp.NewToolResultText(compressedDiff), nil
+			}
+
+			// Return the enhanced diff without compression
 			return mcp.NewToolResultText(enhancedDiff), nil
 		}
 }
