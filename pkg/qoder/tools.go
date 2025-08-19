@@ -590,3 +590,106 @@ func parseChunkHeader(header string) (oldStart, oldLines, newStart, newLines int
 
 	return oldStart, oldLines, newStart, newLines, nil
 }
+
+// QoderGetPRFiles creates a tool to get PR files with enhanced patch content
+func QoderGetPRFiles(getClient GetClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
+	toolName := "get_pr_files"
+	description := "Get the files changed in a pull request. Returns file metadata and enhanced patch content with line numbers. Automatically compresses patch content when needed to avoid context overflow."
+
+	return mcp.NewTool(toolName,
+			mcp.WithDescription(description),
+			mcp.WithNumber("pull_number",
+				mcp.Required(),
+				mcp.Description("Pull request number"),
+			),
+			mcp.WithNumber("page",
+				mcp.Description("Page number for pagination (default: 1)"),
+			),
+			mcp.WithNumber("per_page",
+				mcp.Description("Number of items per page (default: 30, max: 100)"),
+			),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			// Extract required parameters
+			pullNumber, err := getRequiredNumberParam(request, "pull_number")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			// Extract optional pagination parameters
+			page := getOptionalNumberParam(request, "page")
+			if page == 0 {
+				page = 1
+			}
+
+			perPage := getOptionalNumberParam(request, "per_page")
+			if perPage == 0 {
+				perPage = 30
+			}
+			if perPage > 100 {
+				perPage = 100
+			}
+
+			// Get GitHub client
+			client, err := getClient(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get GitHub client: %v", err)), nil
+			}
+
+			// Fetch pull request files from GitHub API
+			opts := &github.ListOptions{
+				Page:    page,
+				PerPage: perPage,
+			}
+
+			files, resp, err := client.PullRequests.ListFiles(ctx, owner, repo, pullNumber, opts)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get PR files: %v", err)), nil
+			}
+
+			// Enhance patch content with line numbers
+			for _, file := range files {
+				if file.Patch != nil && *file.Patch != "" {
+					enhancedPatch, err := addLineNumbersToNewLines(*file.Patch)
+					if err != nil {
+						return mcp.NewToolResultError(fmt.Sprintf("failed to enhance patch for file %s: %v", file.GetFilename(), err)), nil
+					}
+					file.Patch = &enhancedPatch
+				}
+			}
+
+			// Apply compression if enabled
+			compressEnabled := true
+			if envVal := os.Getenv("PR_DIFF_COMPRESS_ENABLED"); envVal == "false" {
+				compressEnabled = false
+			}
+
+			if compressEnabled {
+				fileCompressor := NewFileListCompressor()
+				files = fileCompressor.CompressFileList(files)
+			}
+
+			// Create response structure with pagination info
+			result := struct {
+				Files      []*github.CommitFile `json:"files"`
+				Page       int                  `json:"page"`
+				PerPage    int                  `json:"per_page"`
+				HasNext    bool                 `json:"has_next"`
+				TotalCount int                  `json:"total_count"`
+			}{
+				Files:      files,
+				Page:       page,
+				PerPage:    perPage,
+				HasNext:    resp.NextPage > 0,
+				TotalCount: len(files),
+			}
+
+			// Marshal to JSON and return
+			resultJSON, err := json.Marshal(result)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to marshal result: %v", err)), nil
+			}
+
+			return mcp.NewToolResultText(string(resultJSON)), nil
+		}
+}

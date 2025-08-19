@@ -54,6 +54,10 @@ func registerTools(s *server.MCPServer, getClient GetClientFn, getGQLClient GetG
 	getPRDiffTool, getPRDiffHandler := QoderGetPRDiff(getClient, owner, repo)
 	s.AddTool(getPRDiffTool, getPRDiffHandler)
 
+	// Register the get PR files tool
+	getPRFilesTool, getPRFilesHandler := QoderGetPRFiles(getClient, owner, repo)
+	s.AddTool(getPRFilesTool, getPRFilesHandler)
+
 	// Future tools can be added here:
 	// tool2, handler2 := AnotherQoderTool(getClient, ...)
 	// s.AddTool(tool2, handler2)

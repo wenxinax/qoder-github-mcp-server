@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/google/go-github/v73/github"
 )
 
 // DiffFile represents a file in the diff
@@ -423,4 +425,262 @@ func (c *DiffCompressor) reconstructDiff(files []DiffFile) string {
 	}
 
 	return strings.Join(parts, "\n")
+}
+
+// FileListCompressor handles compression of PR file lists by removing patch content when needed
+type FileListCompressor struct {
+	maxTotalWords int
+	maxFileWords  int
+}
+
+// NewFileListCompressor creates a new file list compressor with environment variable configuration
+func NewFileListCompressor() *FileListCompressor {
+	maxTotalWords := 50000 // default total words limit
+	maxFileWords := 5000   // default per-file words limit
+
+	if envVal := os.Getenv("PR_DIFF_MAX_WORDS"); envVal != "" {
+		if val, err := strconv.Atoi(envVal); err == nil && val > 0 {
+			maxTotalWords = val
+		}
+	}
+
+	if envVal := os.Getenv("PR_DIFF_MAX_FILE_WORDS"); envVal != "" {
+		if val, err := strconv.Atoi(envVal); err == nil && val > 0 {
+			maxFileWords = val
+		}
+	}
+
+	return &FileListCompressor{
+		maxTotalWords: maxTotalWords,
+		maxFileWords:  maxFileWords,
+	}
+}
+
+// CompressFileList applies compression strategies to file list by removing patch content when needed
+func (c *FileListCompressor) CompressFileList(files []*github.CommitFile) []*github.CommitFile {
+	// Calculate total patch size
+	totalWords := 0
+	for _, file := range files {
+		if file.Patch != nil {
+			totalWords += c.countWords(*file.Patch)
+		}
+	}
+
+	// If within limits, return as-is
+	if totalWords <= c.maxTotalWords {
+		return files
+	}
+
+	// Create a deep copy to avoid modifying original
+	compressedFiles := make([]*github.CommitFile, len(files))
+	for i, file := range files {
+		// Create a deep copy of the file
+		fileCopy := &github.CommitFile{
+			SHA:              file.SHA,
+			Filename:         file.Filename,
+			Additions:        file.Additions,
+			Deletions:        file.Deletions,
+			Changes:          file.Changes,
+			Status:           file.Status,
+			RawURL:           file.RawURL,
+			BlobURL:          file.BlobURL,
+			ContentsURL:      file.ContentsURL,
+			PreviousFilename: file.PreviousFilename,
+		}
+		// Deep copy the patch string
+		if file.Patch != nil {
+			patchCopy := *file.Patch
+			fileCopy.Patch = &patchCopy
+		}
+		compressedFiles[i] = fileCopy
+	}
+
+	// Apply compression strategies progressively until within limits
+
+	// Strategy 1: Remove patch from non-source code files
+	compressedFiles = c.removePatchFromNonSourceFiles(compressedFiles)
+	if c.calculateTotalWords(compressedFiles) <= c.maxTotalWords {
+		return compressedFiles
+	}
+
+	// Strategy 2: Remove patch from large files
+	compressedFiles = c.removePatchFromLargeFiles(compressedFiles)
+	if c.calculateTotalWords(compressedFiles) <= c.maxTotalWords {
+		return compressedFiles
+	}
+
+	// Strategy 3: Remove patch from deletion-only files
+	compressedFiles = c.removePatchFromDeletionOnlyFiles(compressedFiles)
+	if c.calculateTotalWords(compressedFiles) <= c.maxTotalWords {
+		return compressedFiles
+	}
+
+	// Strategy 4: Keep only the most important files with patches
+	compressedFiles = c.keepOnlyImportantFilePatches(compressedFiles)
+
+	return compressedFiles
+}
+
+// countWords counts words in a string
+func (c *FileListCompressor) countWords(text string) int {
+	return len(strings.Fields(text))
+}
+
+// calculateTotalWords calculates total words in all patches
+func (c *FileListCompressor) calculateTotalWords(files []*github.CommitFile) int {
+	total := 0
+	for _, file := range files {
+		if file.Patch != nil {
+			total += c.countWords(*file.Patch)
+		}
+	}
+	return total
+}
+
+// removePatchFromNonSourceFiles removes patch content from non-source code files
+func (c *FileListCompressor) removePatchFromNonSourceFiles(files []*github.CommitFile) []*github.CommitFile {
+	for _, file := range files {
+		if file.Filename != nil && !c.isSourceCodeFile(*file.Filename) {
+			// Keep file metadata but remove patch content
+			file.Patch = github.Ptr("[Patch removed: non-source code file]")
+		}
+	}
+	return files
+}
+
+// removePatchFromLargeFiles removes patch content from files with large patches
+func (c *FileListCompressor) removePatchFromLargeFiles(files []*github.CommitFile) []*github.CommitFile {
+	for _, file := range files {
+		if file.Patch != nil && c.countWords(*file.Patch) > c.maxFileWords {
+			// Keep file metadata but remove patch content
+			file.Patch = github.Ptr("[Patch removed: file too large]")
+		}
+	}
+	return files
+}
+
+// removePatchFromDeletionOnlyFiles removes patch content from files with only deletions
+func (c *FileListCompressor) removePatchFromDeletionOnlyFiles(files []*github.CommitFile) []*github.CommitFile {
+	for _, file := range files {
+		if file.Patch != nil && c.isDeletionOnlyFile(file) {
+			// Keep file metadata but remove patch content
+			file.Patch = github.Ptr("[Patch removed: deletion-only file]")
+		}
+	}
+	return files
+}
+
+// keepOnlyImportantFilePatches keeps patches only for the most important files
+func (c *FileListCompressor) keepOnlyImportantFilePatches(files []*github.CommitFile) []*github.CommitFile {
+	// Sort files by importance (source code files first, then by additions count)
+	type fileWithWords struct {
+		file  *github.CommitFile
+		words int
+		score int // higher score = more important
+	}
+
+	var fileStats []fileWithWords
+	for _, file := range files {
+		if file.Patch == nil {
+			continue
+		}
+
+		words := c.countWords(*file.Patch)
+		score := 0
+
+		// Source code files get higher score
+		if file.Filename != nil && c.isSourceCodeFile(*file.Filename) {
+			score += 1000
+		}
+
+		// Files with more additions get higher score
+		if file.Additions != nil {
+			score += *file.Additions
+		}
+
+		fileStats = append(fileStats, fileWithWords{file, words, score})
+	}
+
+	// Sort by score (descending) then by words (ascending - prefer smaller files)
+	sort.Slice(fileStats, func(i, j int) bool {
+		if fileStats[i].score == fileStats[j].score {
+			return fileStats[i].words < fileStats[j].words
+		}
+		return fileStats[i].score > fileStats[j].score
+	})
+
+	// Keep patches for important files within word limit
+	currentWords := 0
+	for _, stat := range fileStats {
+		if currentWords+stat.words <= c.maxTotalWords {
+			currentWords += stat.words
+		} else {
+			// Remove patch from this file
+			stat.file.Patch = github.Ptr("[Patch removed: reached word limit]")
+		}
+	}
+
+	return files
+}
+
+// isSourceCodeFile checks if a file is source code based on extension
+func (c *FileListCompressor) isSourceCodeFile(filename string) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	sourceExts := []string{
+		".go", ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".c", ".cpp", ".h", ".hpp",
+		".cs", ".php", ".rb", ".rs", ".kt", ".swift", ".scala", ".clj", ".ml", ".hs",
+		".sh", ".bash", ".zsh", ".ps1", ".sql", ".r", ".m", ".pl", ".lua", ".dart",
+		".vue", ".svelte", ".elm", ".ex", ".exs", ".cr", ".nim", ".zig", ".v",
+		".html", ".css", ".scss", ".sass", ".less", ".xml", ".yaml", ".yml", ".json",
+		".toml", ".ini", ".cfg", ".conf", ".properties", ".env", ".gitignore",
+		".dockerfile", ".makefile", ".md", ".rst", ".txt",
+	}
+
+	for _, sourceExt := range sourceExts {
+		if ext == sourceExt {
+			return true
+		}
+	}
+
+	// Check special filenames without extensions
+	baseName := strings.ToLower(filepath.Base(filename))
+	specialFiles := []string{
+		"makefile", "dockerfile", "rakefile", "gemfile", "podfile",
+		"readme", "license", "changelog", "contributing",
+		"go.sum", "go.mod", "package-lock.json", "yarn.lock",
+	}
+
+	for _, special := range specialFiles {
+		if baseName == special {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isDeletionOnlyFile checks if a file contains only deletions
+func (c *FileListCompressor) isDeletionOnlyFile(file *github.CommitFile) bool {
+	// If we have the statistics, use them for a more accurate check
+	if file.Changes != nil && file.Deletions != nil {
+		// If all changes are deletions, it's a deletion-only file
+		return *file.Changes == *file.Deletions && *file.Changes > 0
+	}
+
+	// Fallback to patch analysis if statistics are not available
+	if file.Patch == nil {
+		return false
+	}
+
+	lines := strings.Split(*file.Patch, "\n")
+	hasAdditions := false
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+			hasAdditions = true
+			break
+		}
+	}
+
+	return !hasAdditions
 }
