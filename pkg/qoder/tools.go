@@ -120,11 +120,17 @@ func QoderAddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLCl
 			}
 
 			// Adjust suggestion indentation if a suggestion block exists
-			adjustedBody, err := adjustSuggestionIndentation(ctx, restClient, params.Owner, params.Repo, int(params.PullNumber), params.Path, int(*params.Line), params.Body)
-			if err != nil {
-				// If adjustment fails, log the error and proceed with the original body
-				// This ensures that the comment is still added even if indentation adjustment fails
-				fmt.Fprintf(os.Stderr, "Failed to adjust suggestion indentation: %v\n", err)
+			var adjustedBody string
+			if params.Line != nil {
+				adjustedBody, err = adjustSuggestionIndentation(ctx, restClient, params.Owner, params.Repo, int(params.PullNumber), params.Path, int(*params.Line), params.Body)
+				if err != nil {
+					// If adjustment fails, log the error and proceed with the original body
+					// This ensures that the comment is still added even if indentation adjustment fails
+					fmt.Fprintf(os.Stderr, "Failed to adjust suggestion indentation: %v\n", err)
+					adjustedBody = params.Body
+				}
+			} else {
+				// No line specified, use original body without adjustment
 				adjustedBody = params.Body
 			}
 
