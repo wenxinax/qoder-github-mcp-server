@@ -676,3 +676,210 @@ func TestEndToEndIndentationAdjustment(t *testing.T) {
 		})
 	}
 }
+
+// ====== Complete Comment Body Processing Tests ======
+
+func TestCompleteCommentBodyProcessing(t *testing.T) {
+	tests := []struct {
+		name                string
+		originalCommentBody string // 模拟GitHub PR comment的完整body
+		originalCodeLine    string // 模拟目标行的原始代码
+		expectedFinalBody   string // 期望处理后的完整comment body
+		description         string // 测试场景描述
+	}{
+		{
+			name: "完整流程：带suggestion的comment处理",
+			originalCommentBody: strings.Join([]string{
+				"这里有一个性能优化建议：",
+				"",
+				"```suggestion",
+				"                // 优化：使用HashMap提高查询效率",
+				"                Map<String, Product> productMap = new HashMap<>();",
+				"                for (Product p : products) {",
+				"                    productMap.put(p.getName(), p);",
+				"                }",
+				"                return productMap.get(request.getName());",
+				"```",
+				"",
+				"这样可以将时间复杂度从O(n)降低到O(1)。",
+			}, "\n"),
+			originalCodeLine: "        // 查找产品的逻辑",
+			expectedFinalBody: strings.Join([]string{
+				"这里有一个性能优化建议：",
+				"",
+				"```suggestion",
+				"        // 优化：使用HashMap提高查询效率",
+				"        Map<String, Product> productMap = new HashMap<>();",
+				"        for (Product p : products) {",
+				"            productMap.put(p.getName(), p);",
+				"        }",
+				"        return productMap.get(request.getName());",
+				"```",
+				"",
+				"这样可以将时间复杂度从O(n)降低到O(1)。",
+			}, "\n"),
+			description: "模拟完整的GitHub PR comment处理：从16个空格基础缩进调整为8个空格，保持comment的其他部分不变",
+		},
+		{
+			name: "完整流程：制表符缩进环境的comment处理",
+			originalCommentBody: strings.Join([]string{
+				"建议重构这段代码：",
+				"",
+				"```suggestion",
+				"    // 使用策略模式重构",
+				"    PaymentStrategy strategy = PaymentStrategyFactory.create(request.getPaymentType());",
+				"    if (strategy == null) {",
+				"        throw new UnsupportedPaymentTypeException(request.getPaymentType());",
+				"    }",
+				"    PaymentResult result = strategy.process(request);",
+				"    return result;",
+				"```",
+				"",
+				"这样代码更加清晰，易于扩展新的支付方式。",
+			}, "\n"),
+			originalCodeLine: "\t\t\tif (paymentType.equals(\"CREDIT_CARD\")) {",
+			expectedFinalBody: strings.Join([]string{
+				"建议重构这段代码：",
+				"",
+				"```suggestion",
+				"\t\t\t// 使用策略模式重构",
+				"\t\t\tPaymentStrategy strategy = PaymentStrategyFactory.create(request.getPaymentType());",
+				"\t\t\tif (strategy == null) {",
+				"\t\t\t    throw new UnsupportedPaymentTypeException(request.getPaymentType());",
+				"\t\t\t}",
+				"\t\t\tPaymentResult result = strategy.process(request);",
+				"\t\t\treturn result;",
+				"```",
+				"",
+				"这样代码更加清晰，易于扩展新的支付方式。",
+			}, "\n"),
+			description: "模拟制表符缩进环境：从4个空格基础缩进调整为3个制表符",
+		},
+		{
+			name: "完整流程：无基础缩进的suggestion处理",
+			originalCommentBody: strings.Join([]string{
+				"请添加异常处理：",
+				"",
+				"```suggestion",
+				"try {",
+				"    result = externalService.call(request);",
+				"    if (result == null) {",
+				"        throw new ServiceException(\"External service returned null\");",
+				"    }",
+				"} catch (RemoteException e) {",
+				"    logger.error(\"Failed to call external service\", e);",
+				"    throw new ServiceException(\"External service unavailable\", e);",
+				"}",
+				"```",
+				"",
+				"这样能更好地处理外部服务调用的异常情况。",
+			}, "\n"),
+			originalCodeLine: "            result = externalService.call(request);",
+			expectedFinalBody: strings.Join([]string{
+				"请添加异常处理：",
+				"",
+				"```suggestion",
+				"            try {",
+				"                result = externalService.call(request);",
+				"                if (result == null) {",
+				"                    throw new ServiceException(\"External service returned null\");",
+				"                }",
+				"            } catch (RemoteException e) {",
+				"                logger.error(\"Failed to call external service\", e);",
+				"                throw new ServiceException(\"External service unavailable\", e);",
+				"            }",
+				"```",
+				"",
+				"这样能更好地处理外部服务调用的异常情况。",
+			}, "\n"),
+			description: "模拟无基础缩进的suggestion处理：为深层嵌套代码添加12个空格基础缩进",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Logf("\n=== %s ===", tt.description)
+			t.Logf("原始comment body长度: %d 字符", len(tt.originalCommentBody))
+
+			// 步骤1：从原始代码行提取目标缩进
+			targetIndentation := getIndentation(tt.originalCodeLine)
+			t.Logf("步骤1 - 目标缩进: %q (长度=%d)", targetIndentation, len(targetIndentation))
+
+			// 步骤2：提取suggestion块
+			suggestionBlock, err := extractSuggestionBlock(tt.originalCommentBody)
+			if err != nil {
+				t.Fatalf("提取suggestion块失败: %v", err)
+			}
+			t.Logf("步骤2 - 提取的suggestion块长度: %d 字符", len(suggestionBlock))
+
+			// 步骤3：检测suggestion的基础缩进
+			baseIndentation := detectBaseIndentation(suggestionBlock)
+			t.Logf("步骤3 - 检测到的基础缩进: %q (长度=%d)", baseIndentation, len(baseIndentation))
+
+			// 步骤4：移除基础缩进
+			unindentedSuggestion := removeBaseIndentation(suggestionBlock, baseIndentation)
+			t.Logf("步骤4 - 移除基础缩进后（显示前3行）:")
+			unindentedLines := strings.Split(unindentedSuggestion, "\n")
+			for i, line := range unindentedLines[:min(3, len(unindentedLines))] {
+				if strings.TrimSpace(line) != "" {
+					indent := getIndentation(line)
+					t.Logf("    第%d行: 缩进=%q (长度=%d), 内容=%q", i+1, indent, len(indent), strings.TrimSpace(line))
+				}
+			}
+
+			// 步骤5：应用目标缩进
+			adjustedSuggestion := applyBaseIndentation(unindentedSuggestion, targetIndentation)
+			t.Logf("步骤5 - 应用目标缩进后（显示前3行）:")
+			adjustedLines := strings.Split(adjustedSuggestion, "\n")
+			for i, line := range adjustedLines[:min(3, len(adjustedLines))] {
+				if strings.TrimSpace(line) != "" {
+					indent := getIndentation(line)
+					t.Logf("    第%d行: 缩进=%q (长度=%d), 内容=%q", i+1, indent, len(indent), strings.TrimSpace(line))
+				}
+			}
+
+			// 步骤6：获取完整的suggestion块并替换
+			fullSuggestionBlock, err := getFullSuggestionBlock(tt.originalCommentBody)
+			if err != nil {
+				t.Fatalf("获取完整suggestion块失败: %v", err)
+			}
+
+			// 步骤7：构建新的suggestion块并替换
+			adjustedSuggestion = strings.TrimSuffix(adjustedSuggestion, "\n")
+			newSuggestionBlock := "```suggestion\n" + adjustedSuggestion + "\n```"
+			finalCommentBody := strings.Replace(tt.originalCommentBody, fullSuggestionBlock, newSuggestionBlock, 1)
+
+			// 验证最终结果
+			if finalCommentBody != tt.expectedFinalBody {
+				t.Errorf("❌ 完整comment处理测试失败！")
+				t.Logf("期望结果长度: %d 字符", len(tt.expectedFinalBody))
+				t.Logf("实际结果长度: %d 字符", len(finalCommentBody))
+
+				// 逐行比较差异（只显示前5行）
+				expectedLines := strings.Split(tt.expectedFinalBody, "\n")
+				actualLines := strings.Split(finalCommentBody, "\n")
+				for i := 0; i < min(5, len(expectedLines), len(actualLines)); i++ {
+					if expectedLines[i] != actualLines[i] {
+						t.Errorf("第%d行不匹配:\n  期望: %q\n  实际: %q", i+1, expectedLines[i], actualLines[i])
+					}
+				}
+			} else {
+				t.Logf("✅ 完整comment处理测试成功！")
+			}
+		})
+	}
+}
+
+// 添加min辅助函数
+func min(a, b int, rest ...int) int {
+	result := a
+	if b < result {
+		result = b
+	}
+	for _, v := range rest {
+		if v < result {
+			result = v
+		}
+	}
+	return result
+}

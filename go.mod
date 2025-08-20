@@ -7,6 +7,7 @@ toolchain go1.24.5
 require (
 	github.com/go-viper/mapstructure/v2 v2.4.0
 	github.com/google/go-github/v73 v73.0.0
+	github.com/jarcoal/httpmock v1.4.1
 	github.com/mark3labs/mcp-go v0.36.0
 	github.com/shurcooL/githubv4 v0.0.0-20240727222349-48295856cce7
 	github.com/sirupsen/logrus v1.9.3
