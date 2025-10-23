@@ -2,7 +2,6 @@ package qoder
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -215,15 +214,19 @@ func QoderAddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLCl
 			}
 
 			// Marshal and encode the context for the footer
-			contextJSON, err := json.Marshal(fixContext)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("failed to marshal context: %v", err)), nil
-			}
-			encodedContext := base64.StdEncoding.EncodeToString(contextJSON)
-			footer := fmt.Sprintf(`
+			// contextJSON, err := json.Marshal(fixContext)
+			// if err != nil {
+			// 	return mcp.NewToolResultError(fmt.Sprintf("failed to marshal context: %v", err)), nil
+			// }
+			// encodedContext := base64.StdEncoding.EncodeToString(contextJSON)
+			// 			footer := fmt.Sprintf(`
 
----
-*Powered by Qoder* | [One-Click Qoder Fix](http://localhost:9080/reload-to-qoder?context=%s)`, encodedContext)
+			// ---
+			// *Powered by Qoder* | [One-Click Qoder Fix](http://localhost:9080/reload-to-qoder?context=%s)`, encodedContext)
+			footer := `
+
+			---
+			*Powered by Qoder*`
 			fullBody := adjustedBody + footer // Use adjusted body here as well
 
 			// Then we can create a new review thread comment on the review.
