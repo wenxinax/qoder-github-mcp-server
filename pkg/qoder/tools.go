@@ -225,8 +225,8 @@ func QoderAddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLCl
 			// *Powered by Qoder* | [One-Click Qoder Fix](http://localhost:9080/reload-to-qoder?context=%s)`, encodedContext)
 			footer := `
 
-			---
-			*Powered by Qoder*`
+---
+*Powered by Qoder*`
 			fullBody := adjustedBody + footer // Use adjusted body here as well
 
 			// Then we can create a new review thread comment on the review.
