@@ -502,6 +502,62 @@ func ReplyComment(getClient GetClientFn, owner, repo string) (mcp.Tool, server.T
 		},
 }
 
+// UpdateComment creates a tool to update an existing comment's full content
+func UpdateComment(getClient GetClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
+	toolName := "update_comment"
+	description := "Update an existing GitHub comment (issue comment or review comment) with new content"
+
+	return mcp.NewTool(toolName,
+			mcp.WithDescription(description),
+			mcp.WithString("comment_type",
+				mcp.Required(),
+				mcp.Description("Type of comment to update: 'issue' or 'review'"),
+				mcp.Enum("issue", "review"),
+			),
+			mcp.WithNumber("comment_id",
+				mcp.Required(),
+				mcp.Description("ID of the comment to update"),
+			),
+			mcp.WithString("body",
+				mcp.Required(),
+				mcp.Description("New content for the comment"),
+			),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			// Extract parameters
+			commentType, err := getRequiredStringParam(request, "comment_type")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			commentID, err := getRequiredNumberParam(request, "comment_id")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			body, err := getRequiredStringParam(request, "body")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			// Get GitHub client
+			client, err := getClient(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get GitHub client: %v", err)), nil
+			}
+
+			// Handle different comment types
+			switch commentType {
+			case "issue":
+				return updateFullIssueComment(ctx, client, owner, repo, int64(commentID), body)
+			case "review":
+				return updateFullReviewComment(ctx, client, owner, repo, int64(commentID), body)
+			default:
+				return mcp.NewToolResultError(fmt.Sprintf("unsupported comment type: %s", commentType)), nil
+			}
+		},
+}
+
 // replyToIssueComment creates a new comment on an issue as a reply
 func replyToIssueComment(ctx context.Context, client *github.Client, owner, repo string, issueNumber int, body string) (*mcp.CallToolResult, error) {
 	// Create a new comment on the issue
@@ -540,6 +596,48 @@ func replyToReviewComment(ctx context.Context, client *github.Client, owner, rep
 
 	// Return the created reply as JSON
 	result, err := json.Marshal(replyComment)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(string(result)), nil
+}
+
+// updateFullIssueComment updates the full content of an issue comment
+func updateFullIssueComment(ctx context.Context, client *github.Client, owner, repo string, commentID int64, newBody string) (*mcp.CallToolResult, error) {
+	// Update the comment with new content
+	updateComment := &github.IssueComment{
+		Body: github.Ptr(newBody),
+	}
+
+	updatedComment, _, err := client.Issues.EditComment(ctx, owner, repo, commentID, updateComment)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to update issue comment: %v", err)), nil
+	}
+
+	// Return the updated comment as JSON
+	result, err := json.Marshal(updatedComment)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(string(result)), nil
+}
+
+// updateFullReviewComment updates the full content of a review comment
+func updateFullReviewComment(ctx context.Context, client *github.Client, owner, repo string, commentID int64, newBody string) (*mcp.CallToolResult, error) {
+	// Update the comment with new content
+	updateComment := &github.PullRequestComment{
+		Body: github.Ptr(newBody),
+	}
+
+	updatedComment, _, err := client.PullRequests.EditComment(ctx, owner, repo, commentID, updateComment)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to update review comment: %v", err)), nil
+	}
+
+	// Return the updated comment as JSON
+	result, err := json.Marshal(updatedComment)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
 	}
