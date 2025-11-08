@@ -499,7 +499,7 @@ func ReplyComment(getClient GetClientFn, owner, repo string) (mcp.Tool, server.T
 			default:
 				return mcp.NewToolResultError(fmt.Sprintf("unsupported comment type: %s", commentType)), nil
 			}
-		},
+		}
 }
 
 // UpdateComment creates a tool to update an existing comment's full content
@@ -555,7 +555,7 @@ func UpdateComment(getClient GetClientFn, owner, repo string) (mcp.Tool, server.
 			default:
 				return mcp.NewToolResultError(fmt.Sprintf("unsupported comment type: %s", commentType)), nil
 			}
-		},
+		}
 }
 
 // replyToIssueComment creates a new comment on an issue as a reply
@@ -589,7 +589,7 @@ func replyToReviewComment(ctx context.Context, client *github.Client, owner, rep
 	}
 
 	// Create a reply to the root comment
-	replyComment, _, err := client.PullRequests.CreateCommentReply(ctx, owner, repo, pullNumber, rootCommentID, body)
+	replyComment, _, err := client.PullRequests.CreateCommentInReplyTo(ctx, owner, repo, pullNumber, body, rootCommentID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to create review comment reply: %v", err)), nil
 	}
