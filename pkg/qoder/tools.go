@@ -35,6 +35,8 @@ type QoderFixContext struct {
 	Body       string `json:"body"`
 }
 
+
+
 // QoderUpdateComment creates a tool to update a comment (issue or review) with content between Qoder markers
 func QoderUpdateComment(getClient GetClientFn, owner, repo, commentID, commentType string) (mcp.Tool, server.ToolHandlerFunc) {
 	toolName := "update_comment"
@@ -428,6 +430,149 @@ func newGQLIntPtr(i *int32) *githubv4.Int {
 
 func NewGitHubGraphQLErrorResponse(ctx context.Context, message string, err error) *mcp.CallToolResult {
 	return mcp.NewToolResultError(fmt.Sprintf("%s: %v", message, err))
+}
+
+// ReplyComment creates a tool to reply to an existing comment (issue or review)
+func ReplyComment(getClient GetClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
+	toolName := "reply_comment"
+	description := "Reply to an existing GitHub comment (issue comment or review comment)"
+
+	return mcp.NewTool(toolName,
+			mcp.WithDescription(description),
+			mcp.WithString("comment_type",
+				mcp.Required(),
+				mcp.Description("Type of comment to reply to: 'issue' or 'review'"),
+				mcp.Enum("issue", "review"),
+			),
+			mcp.WithNumber("comment_id",
+				mcp.Required(),
+				mcp.Description("ID of the comment to reply to"),
+			),
+			mcp.WithString("body",
+				mcp.Required(),
+				mcp.Description("Reply content"),
+			),
+			mcp.WithNumber("issue_number",
+				mcp.Description("Issue number (required when comment_type is 'issue')"),
+			),
+			mcp.WithNumber("pull_number",
+				mcp.Description("Pull request number (required when comment_type is 'review')"),
+			),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			// Extract parameters
+			commentType, err := getRequiredStringParam(request, "comment_type")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			commentID, err := getRequiredNumberParam(request, "comment_id")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			body, err := getRequiredStringParam(request, "body")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			// Get GitHub client
+			client, err := getClient(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get GitHub client: %v", err)), nil
+			}
+
+			// Handle different comment types
+			switch commentType {
+			case "issue":
+				issueNumber := getOptionalNumberParam(request, "issue_number")
+				if issueNumber == 0 {
+					return mcp.NewToolResultError("issue_number is required when comment_type is 'issue'"), nil
+				}
+				return replyToIssueComment(ctx, client, owner, repo, issueNumber, body)
+			case "review":
+				pullNumber := getOptionalNumberParam(request, "pull_number")
+				if pullNumber == 0 {
+					return mcp.NewToolResultError("pull_number is required when comment_type is 'review'"), nil
+				}
+				return replyToReviewComment(ctx, client, owner, repo, pullNumber, int64(commentID), body)
+			default:
+				return mcp.NewToolResultError(fmt.Sprintf("unsupported comment type: %s", commentType)), nil
+			}
+		},
+}
+
+// replyToIssueComment creates a new comment on an issue as a reply
+func replyToIssueComment(ctx context.Context, client *github.Client, owner, repo string, issueNumber int, body string) (*mcp.CallToolResult, error) {
+	// Create a new comment on the issue
+	comment := &github.IssueComment{
+		Body: github.Ptr(body),
+	}
+
+	createdComment, _, err := client.Issues.CreateComment(ctx, owner, repo, issueNumber, comment)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to create issue comment: %v", err)), nil
+	}
+
+	// Return the created comment as JSON
+	result, err := json.Marshal(createdComment)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(string(result)), nil
+}
+
+// replyToReviewComment creates a reply to a pull request review comment
+// Always replies to the root (top-level) comment to avoid deep nesting
+func replyToReviewComment(ctx context.Context, client *github.Client, owner, repo string, pullNumber int, commentID int64, body string) (*mcp.CallToolResult, error) {
+	// Find the root comment to avoid deep nesting
+	rootCommentID, err := findRootReviewComment(ctx, client, owner, repo, commentID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to find root comment: %v", err)), nil
+	}
+
+	// Create a reply to the root comment
+	replyComment, _, err := client.PullRequests.CreateCommentReply(ctx, owner, repo, pullNumber, rootCommentID, body)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to create review comment reply: %v", err)), nil
+	}
+
+	// Return the created reply as JSON
+	result, err := json.Marshal(replyComment)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(string(result)), nil
+}
+
+// findRootReviewComment finds the root (top-level) comment of a review comment thread
+func findRootReviewComment(ctx context.Context, client *github.Client, owner, repo string, commentID int64) (int64, error) {
+	currentID := commentID
+	visited := make(map[int64]bool) // Prevent infinite loops
+
+	for {
+		// Prevent infinite loop in case of circular references
+		if visited[currentID] {
+			return 0, fmt.Errorf("circular reference detected in comment thread")
+		}
+		visited[currentID] = true
+
+		// Get the comment details
+		comment, _, err := client.PullRequests.GetComment(ctx, owner, repo, currentID)
+		if err != nil {
+			return 0, fmt.Errorf("failed to get comment %d: %w", currentID, err)
+		}
+
+		// If this comment has no parent (in_reply_to_id is nil), it's the root
+		if comment.InReplyTo == nil || *comment.InReplyTo == 0 {
+			return currentID, nil
+		}
+
+		// Move to the parent comment
+		currentID = *comment.InReplyTo
+	}
 }
 
 // QoderGetPRDiff creates a tool to get PR diff with enhanced line numbers
