@@ -43,26 +43,11 @@ var (
 				return errors.New("GITHUB_REPO not set")
 			}
 
-			commentID := viper.GetString("qoder_comment_id")
-			if commentID == "" {
-				return errors.New("QODER_COMMENT_ID not set")
-			}
-
-			commentType := viper.GetString("qoder_comment_type")
-			if commentType == "" {
-				commentType = "issue" // default to issue comment
-			}
-			if commentType != "issue" && commentType != "review" {
-				return errors.New("QODER_COMMENT_TYPE must be either 'issue' or 'review'")
-			}
-
 			stdioServerConfig := qmcp.StdioServerConfig{
-				Version:     version,
-				Token:       token,
-				Owner:       owner,
-				Repo:        repo,
-				CommentID:   commentID,
-				CommentType: commentType,
+				Version: version,
+				Token:   token,
+				Owner:   owner,
+				Repo:    repo,
 			}
 			return qmcp.RunStdioServer(stdioServerConfig)
 		},
@@ -84,8 +69,6 @@ func initConfig() {
 	viper.BindEnv("github_token", "GITHUB_TOKEN")
 	viper.BindEnv("github_owner", "GITHUB_OWNER")
 	viper.BindEnv("github_repo", "GITHUB_REPO")
-	viper.BindEnv("qoder_comment_id", "QODER_COMMENT_ID")
-	viper.BindEnv("qoder_comment_type", "QODER_COMMENT_TYPE")
 }
 
 func main() {

@@ -15,8 +15,6 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
       - GITHUB_OWNER=${GITHUB_OWNER}
       - GITHUB_REPO=${GITHUB_REPO}
-      - QODER_COMMENT_ID=${QODER_COMMENT_ID}
-      - QODER_COMMENT_TYPE=${QODER_COMMENT_TYPE:-issue}
     stdin_open: true
     tty: true
     restart: unless-stopped
@@ -44,8 +42,6 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
       - GITHUB_OWNER=${GITHUB_OWNER}
       - GITHUB_REPO=${GITHUB_REPO}
-      - QODER_COMMENT_ID=${QODER_COMMENT_ID}
-      - QODER_COMMENT_TYPE=${QODER_COMMENT_TYPE:-issue}
     volumes:
       - .:/app
     working_dir: /app

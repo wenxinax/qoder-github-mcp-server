@@ -3,6 +3,7 @@
 # Variables
 BINARY_NAME=qoder-github-mcp-server
 BUILD_DIR=.
+DIST_DIR=dist
 CMD_DIR=./cmd/qoder-github-mcp-server
 
 # Build information
@@ -19,7 +20,7 @@ DOCKER_REPO ?= qoder/qoder-github-mcp-server
 DOCKER_TAG ?= latest
 DOCKER_IMAGE = $(DOCKER_REGISTRY)/$(DOCKER_REPO):$(DOCKER_TAG)
 
-.PHONY: all build clean test help install deps docker-build docker-push docker-run
+.PHONY: all build clean test help install deps docker-build docker-push docker-run package release
 
 # Default target
 all: build
@@ -47,6 +48,8 @@ test:
 clean:
 	@echo "Cleaning build artifacts..."
 	rm -f $(BUILD_DIR)/$(BINARY_NAME)
+	rm -f $(BUILD_DIR)/$(BINARY_NAME)-*
+	rm -rf $(DIST_DIR)
 	go clean
 
 # Install the binary to GOPATH/bin
@@ -62,6 +65,23 @@ build-all:
 	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 $(CMD_DIR)
 	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe $(CMD_DIR)
 	@echo "Multi-platform build complete"
+
+# Package binaries for release
+package: clean
+	@echo "Building binaries for all platforms..."
+	@mkdir -p $(DIST_DIR)
+	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(DIST_DIR)/$(BINARY_NAME)-$(VERSION)-linux-amd64 $(CMD_DIR)
+	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(DIST_DIR)/$(BINARY_NAME)-$(VERSION)-darwin-amd64 $(CMD_DIR)
+	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(DIST_DIR)/$(BINARY_NAME)-$(VERSION)-darwin-arm64 $(CMD_DIR)
+	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(DIST_DIR)/$(BINARY_NAME)-$(VERSION)-windows-amd64.exe $(CMD_DIR)
+	@echo "Package complete: $(DIST_DIR)/"
+	@ls -lh $(DIST_DIR)/
+
+# Release - build binaries for all platforms
+release:
+	@echo "Creating release binaries for version $(VERSION)..."
+	@$(MAKE) package VERSION=$(VERSION)
+	@echo "Release $(VERSION) complete!"
 
 # Docker commands
 docker-build:
@@ -80,8 +100,6 @@ docker-run:
 		-e GITHUB_TOKEN \
 		-e GITHUB_OWNER \
 		-e GITHUB_REPO \
-		-e QODER_COMMENT_ID \
-		-e QODER_COMMENT_TYPE \
 		$(DOCKER_IMAGE)
 
 docker-shell:
@@ -90,8 +108,6 @@ docker-shell:
 		-e GITHUB_TOKEN \
 		-e GITHUB_OWNER \
 		-e GITHUB_REPO \
-		-e QODER_COMMENT_ID \
-		-e QODER_COMMENT_TYPE \
 		--entrypoint /bin/sh \
 		$(DOCKER_IMAGE)
 
@@ -104,6 +120,8 @@ help:
 	@echo "  clean        - Clean build artifacts"
 	@echo "  install      - Install binary to GOPATH/bin"
 	@echo "  build-all    - Build for multiple platforms"
+	@echo "  package      - Build binaries for all platforms to dist/"
+	@echo "  release      - Build release binaries (VERSION=x.x.x)"
 	@echo "  docker-build - Build Docker image"
 	@echo "  docker-push  - Build and push Docker image"
 	@echo "  docker-run   - Run Docker container"

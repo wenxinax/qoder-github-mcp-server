@@ -10,7 +10,7 @@ import (
 )
 
 // NewServer creates a new Qoder MCP server with the specified configuration
-func NewServer(version, token, owner, repo, commentID, commentType string) *server.MCPServer {
+func NewServer(version, token, owner, repo string) *server.MCPServer {
 	// Create a new MCP server
 	s := server.NewMCPServer(
 		"qoder-github-mcp-server",
@@ -35,27 +35,23 @@ func NewServer(version, token, owner, repo, commentID, commentType string) *serv
 	}
 
 	// Register tools
-	registerTools(s, getClient, getGQLClient, owner, repo, commentID, commentType)
+	registerTools(s, getClient, getGQLClient, owner, repo)
 
 	return s
 }
 
 // registerTools registers all available tools with the MCP server
-func registerTools(s *server.MCPServer, getClient GetClientFn, getGQLClient GetGQLClientFn, owner, repo, commentID, commentType string) {
-	// Register the comment update tool (supports both issue and review comments)
-	// updateTool, updateHandler := QoderUpdateComment(getClient, owner, repo, commentID, commentType)
-	// s.AddTool(updateTool, updateHandler)
-
+func registerTools(s *server.MCPServer, getClient GetClientFn, getGQLClient GetGQLClientFn, owner, repo string) {
 	// Register the add review line comment tool
-	addCommentTool, addCommentHandler := QoderAddCommentToPendingReview(getClient, getGQLClient)
+	addCommentTool, addCommentHandler := AddCommentToPendingReview(getClient, getGQLClient, owner, repo)
 	s.AddTool(addCommentTool, addCommentHandler)
 
 	// Register the create pending review tool
-	createReviewTool, createReviewHandler := CreatePendingPullRequestReview(getClient)
+	createReviewTool, createReviewHandler := CreatePendingPullRequestReview(getClient, owner, repo)
 	s.AddTool(createReviewTool, createReviewHandler)
 
 	// Register the submit pending review tool
-	submitReviewTool, submitReviewHandler := SubmitPendingPullRequestReview(getClient, getGQLClient)
+	submitReviewTool, submitReviewHandler := SubmitPendingPullRequestReview(getClient, getGQLClient, owner, repo)
 	s.AddTool(submitReviewTool, submitReviewHandler)
 
 	// Register the reply comment tool
@@ -66,15 +62,39 @@ func registerTools(s *server.MCPServer, getClient GetClientFn, getGQLClient GetG
 	updateCommentTool, updateCommentHandler := UpdateComment(getClient, owner, repo)
 	s.AddTool(updateCommentTool, updateCommentHandler)
 
-	// Register the get PR diff tool
-	getPRDiffTool, getPRDiffHandler := QoderGetPRDiff(getClient, owner, repo)
+	// Register the get PR diff tool (with line numbers and compression)
+	getPRDiffTool, getPRDiffHandler := GetPullRequestDiff(getClient, owner, repo)
 	s.AddTool(getPRDiffTool, getPRDiffHandler)
 
 	// Register the get PR files tool
-	getPRFilesTool, getPRFilesHandler := QoderGetPRFiles(getClient, owner, repo)
+	getPRFilesTool, getPRFilesHandler := GetPullRequestFiles(getClient, owner, repo)
 	s.AddTool(getPRFilesTool, getPRFilesHandler)
 
-	// Future tools can be added here:
-	// tool2, handler2 := AnotherQoderTool(getClient, ...)
-	// s.AddTool(tool2, handler2)
+	// Register the get pull request tool
+	getPullRequestTool, getPullRequestHandler := GetPullRequest(getClient, owner, repo)
+	s.AddTool(getPullRequestTool, getPullRequestHandler)
+
+	// Register the get pull request comments tool
+	getPullRequestCommentsTool, getPullRequestCommentsHandler := GetPullRequestComments(getClient, owner, repo)
+	s.AddTool(getPullRequestCommentsTool, getPullRequestCommentsHandler)
+
+	// Register the get pull request reviews tool
+	getPullRequestReviewsTool, getPullRequestReviewsHandler := GetPullRequestReviews(getClient, owner, repo)
+	s.AddTool(getPullRequestReviewsTool, getPullRequestReviewsHandler)
+
+	// Register the create or update file tool
+	createOrUpdateFileTool, createOrUpdateFileHandler := CreateOrUpdateFile(getClient, owner, repo)
+	s.AddTool(createOrUpdateFileTool, createOrUpdateFileHandler)
+
+	// Register the push files tool
+	pushFilesTool, pushFilesHandler := PushFiles(getClient, owner, repo)
+	s.AddTool(pushFilesTool, pushFilesHandler)
+
+	// Register the create branch tool
+	createBranchTool, createBranchHandler := CreateBranch(getClient, owner, repo)
+	s.AddTool(createBranchTool, createBranchHandler)
+
+	// Register the create pull request tool
+	createPullRequestTool, createPullRequestHandler := CreatePullRequest(getClient, owner, repo)
+	s.AddTool(createPullRequestTool, createPullRequestHandler)
 }

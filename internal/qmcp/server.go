@@ -26,12 +26,6 @@ type StdioServerConfig struct {
 
 	// GitHub repository name
 	Repo string
-
-	// CommentID is the comment ID to update
-	CommentID string
-
-	// CommentType is either "issue" or "review"
-	CommentType string
 }
 
 // RunStdioServer starts the MCP server with stdio transport
@@ -41,7 +35,7 @@ func RunStdioServer(cfg StdioServerConfig) error {
 	defer stop()
 
 	// Create the MCP server
-	qoderServer := qoder.NewServer(cfg.Version, cfg.Token, cfg.Owner, cfg.Repo, cfg.CommentID, cfg.CommentType)
+	qoderServer := qoder.NewServer(cfg.Version, cfg.Token, cfg.Owner, cfg.Repo)
 
 	// Create stdio server
 	stdioServer := server.NewStdioServer(qoderServer)

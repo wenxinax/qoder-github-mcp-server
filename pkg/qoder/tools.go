@@ -37,61 +37,16 @@ type QoderFixContext struct {
 
 
 
-// QoderUpdateComment creates a tool to update a comment (issue or review) with content between Qoder markers
-func QoderUpdateComment(getClient GetClientFn, owner, repo, commentID, commentType string) (mcp.Tool, server.ToolHandlerFunc) {
-	toolName := "update_comment"
-	description := fmt.Sprintf("Update a %s comment by replacing content between <!-- QODER_BODY_START --> and <!-- QODER_BODY_END --> markers.", commentType)
-
-	return mcp.NewTool(toolName,
-			mcp.WithDescription(description),
-			mcp.WithString("new_content",
-				mcp.Required(),
-				mcp.Description("New content to replace between the Qoder markers"),
-			),
-		),
-		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			// Extract parameters
-			newContent, err := getRequiredStringParam(request, "new_content")
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-
-			// Parse comment ID from environment variable
-			commentIDInt, err := strconv.ParseInt(commentID, 10, 64)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("invalid comment ID: %v", err)), nil
-			}
-
-			// Get GitHub client
-			client, err := getClient(ctx)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("failed to get GitHub client: %v", err)), nil
-			}
-
-			// Handle different comment types
-			switch commentType {
-			case "issue":
-				return updateIssueComment(ctx, client, owner, repo, commentIDInt, newContent)
-			case "review":
-				return updateReviewComment(ctx, client, owner, repo, commentIDInt, newContent)
-			default:
-				return mcp.NewToolResultError(fmt.Sprintf("unsupported comment type: %s", commentType)), nil
-			}
-		}
-}
-
-// QoderAddCommentToPendingReview creates a tool to add a review comment to a pending review
-func QoderAddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLClientFn) (mcp.Tool, server.ToolHandlerFunc) {
+// AddCommentToPendingReview creates a tool to add a review comment to a pending review
+func AddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
 	toolName := "add_comment_to_pending_review"
 	description := "Add review comment to the requester's latest pending pull request review."
 
 	return mcp.NewTool(toolName,
 			mcp.WithDescription(description),
 			mcp.WithString("body", mcp.Required(), mcp.Description("The text of the review comment")),
-			mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
 			mcp.WithString("path", mcp.Required(), mcp.Description("The relative path to the file that necessitates a comment")),
-			mcp.WithNumber("pullNumber", mcp.Required(), mcp.Description("Pull request number")),
-			mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+			mcp.WithNumber("pull_number", mcp.Required(), mcp.Description("Pull request number")),
 			mcp.WithString("subjectType", mcp.Required(), mcp.Description("The level at which the comment is targeted"), mcp.Enum("FILE", "LINE")),
 			mcp.WithNumber("line", mcp.Description("The line of the blob in the pull request diff that the comment applies to. For multi-line comments, the last line of the range")),
 			mcp.WithString("side", mcp.Description("The side of the diff to comment on. LEFT indicates the previous state, RIGHT indicates the new state"), mcp.Enum("LEFT", "RIGHT")),
@@ -100,16 +55,14 @@ func QoderAddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLCl
 		),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params struct {
-				Owner       string
-				Repo        string
-				PullNumber  int32
-				Path        string
-				Body        string
-				SubjectType string
-				Line        *int32
-				Side        *string
-				StartLine   *int32
-				StartSide   *string
+				PullNumber  int32  `mapstructure:"pull_number"`
+				Path        string `mapstructure:"path"`
+				Body        string `mapstructure:"body"`
+				SubjectType string `mapstructure:"subjectType"`
+				Line        *int32 `mapstructure:"line"`
+				Side        *string `mapstructure:"side"`
+				StartLine   *int32 `mapstructure:"startLine"`
+				StartSide   *string `mapstructure:"startSide"`
 			}
 			if err := mapstructure.Decode(request.Params.Arguments, &params); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -123,7 +76,7 @@ func QoderAddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLCl
 			// Adjust suggestion indentation if a suggestion block exists
 			var adjustedBody string
 			if params.Line != nil {
-				adjustedBody, err = adjustSuggestionIndentation(ctx, restClient, params.Owner, params.Repo, int(params.PullNumber), params.Path, int(*params.Line), params.Body)
+				adjustedBody, err = adjustSuggestionIndentation(ctx, restClient, owner, repo, int(params.PullNumber), params.Path, int(*params.Line), params.Body)
 				if err != nil {
 					// If adjustment fails, log the error and proceed with the original body
 					// This ensures that the comment is still added even if indentation adjustment fails
@@ -170,8 +123,8 @@ func QoderAddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLCl
 
 			vars := map[string]any{
 				"author": githubv4.String(getViewerQuery.Viewer.Login),
-				"owner":  githubv4.String(params.Owner),
-				"name":   githubv4.String(params.Repo),
+				"owner":  githubv4.String(owner),
+				"name":   githubv4.String(repo),
 				"prNum":  githubv4.Int(params.PullNumber),
 			}
 
@@ -195,8 +148,8 @@ func QoderAddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLCl
 
 			// Create QoderFixContext for the footer link
 			fixContext := QoderFixContext{
-				Owner:      params.Owner,
-				Repo:       params.Repo,
+				Owner:      owner,
+				Repo:       repo,
 				PullNumber: int(params.PullNumber),
 				Path:       params.Path,
 				Body:       adjustedBody, // Use adjusted body here
@@ -266,25 +219,21 @@ func QoderAddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLCl
 }
 
 // SubmitPendingPullRequestReview creates a tool to submit a pending pull request review
-func SubmitPendingPullRequestReview(getClient GetClientFn, getGQLClient GetGQLClientFn) (mcp.Tool, server.ToolHandlerFunc) {
+func SubmitPendingPullRequestReview(getClient GetClientFn, getGQLClient GetGQLClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
 	toolName := "submit_pending_pull_request_review"
 	description := "Submit the requester's latest pending pull request review with a specific event type (APPROVE, REQUEST_CHANGES, or COMMENT)"
 
 	return mcp.NewTool(toolName,
 			mcp.WithDescription(description),
-			mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-			mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
-			mcp.WithNumber("pullNumber", mcp.Required(), mcp.Description("Pull request number")),
+			mcp.WithNumber("pull_number", mcp.Required(), mcp.Description("Pull request number")),
 			mcp.WithString("event", mcp.Required(), mcp.Description("Review action: APPROVE, REQUEST_CHANGES, or COMMENT"), mcp.Enum("APPROVE", "REQUEST_CHANGES", "COMMENT")),
 			mcp.WithString("body", mcp.Description("Summary comment for the review (optional)")),
 		),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params struct {
-				Owner      string
-				Repo       string
-				PullNumber int32
-				Event      string
-				Body       *string
+				PullNumber int32   `mapstructure:"pull_number"`
+				Event      string  `mapstructure:"event"`
+				Body       *string `mapstructure:"body"`
 			}
 			if err := mapstructure.Decode(request.Params.Arguments, &params); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -326,8 +275,8 @@ func SubmitPendingPullRequestReview(getClient GetClientFn, getGQLClient GetGQLCl
 
 			vars := map[string]any{
 				"author": githubv4.String(getViewerQuery.Viewer.Login),
-				"owner":  githubv4.String(params.Owner),
-				"name":   githubv4.String(params.Repo),
+				"owner":  githubv4.String(owner),
+				"name":   githubv4.String(repo),
 				"prNum":  githubv4.Int(params.PullNumber),
 			}
 
@@ -360,7 +309,7 @@ func SubmitPendingPullRequestReview(getClient GetClientFn, getGQLClient GetGQLCl
 				submitRequest.Body = params.Body
 			}
 
-			submittedReview, _, err := restClient.PullRequests.SubmitReview(ctx, params.Owner, params.Repo, int(params.PullNumber), reviewID, submitRequest)
+			submittedReview, _, err := restClient.PullRequests.SubmitReview(ctx, owner, repo, int(params.PullNumber), reviewID, submitRequest)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("failed to submit review: %v", err)), nil
 			}
@@ -376,23 +325,19 @@ func SubmitPendingPullRequestReview(getClient GetClientFn, getGQLClient GetGQLCl
 }
 
 // CreatePendingPullRequestReview creates a tool to create a new pending pull request review
-func CreatePendingPullRequestReview(getClient GetClientFn) (mcp.Tool, server.ToolHandlerFunc) {
+func CreatePendingPullRequestReview(getClient GetClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
 	toolName := "create_pending_pull_request_review"
 	description := "Create a new pending pull request review."
 
 	return mcp.NewTool(toolName,
 			mcp.WithDescription(description),
-			mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-			mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
-			mcp.WithNumber("pullNumber", mcp.Required(), mcp.Description("Pull request number")),
+			mcp.WithNumber("pull_number", mcp.Required(), mcp.Description("Pull request number")),
 			mcp.WithString("commitId", mcp.Description("The SHA of the commit to review. If not provided, defaults to the most recent commit in the pull request")),
 		),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params struct {
-				Owner      string
-				Repo       string
-				PullNumber int32
-				CommitId   *string
+				PullNumber int32   `mapstructure:"pull_number"`
+				CommitId   *string `mapstructure:"commitId"`
 			}
 			if err := mapstructure.Decode(request.Params.Arguments, &params); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -403,10 +348,8 @@ func CreatePendingPullRequestReview(getClient GetClientFn) (mcp.Tool, server.Too
 				return nil, fmt.Errorf("failed to get GitHub client: %w", err)
 			}
 
-			// Create the review request
-			reviewRequest := &github.PullRequestReviewRequest{
-				Event: github.Ptr("PENDING"),
-			}
+			// Create the review request (without Event field for pending review)
+			reviewRequest := &github.PullRequestReviewRequest{}
 
 			// Add commit ID if provided
 			if params.CommitId != nil && *params.CommitId != "" {
@@ -414,7 +357,7 @@ func CreatePendingPullRequestReview(getClient GetClientFn) (mcp.Tool, server.Too
 			}
 
 			// Create the review
-			review, _, err := client.PullRequests.CreateReview(ctx, params.Owner, params.Repo, int(params.PullNumber), reviewRequest)
+			review, _, err := client.PullRequests.CreateReview(ctx, owner, repo, int(params.PullNumber), reviewRequest)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("failed to create pending review: %v", err)), nil
 			}
@@ -427,106 +370,6 @@ func CreatePendingPullRequestReview(getClient GetClientFn) (mcp.Tool, server.Too
 
 			return mcp.NewToolResultText(string(result)), nil
 		}
-}
-
-// updateIssueComment updates an issue comment
-func updateIssueComment(ctx context.Context, client *github.Client, owner, repo string, commentID int64, newContent string) (*mcp.CallToolResult, error) {
-	// Get the current comment
-	comment, _, err := client.Issues.GetComment(ctx, owner, repo, commentID)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to get issue comment: %v", err)), nil
-	}
-
-	if comment.Body == nil {
-		return mcp.NewToolResultError("comment body is nil"), nil
-	}
-
-	// Replace content between markers
-	updatedBody, err := replaceQoderContent(*comment.Body, newContent)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to replace content: %v", err)), nil
-	}
-
-	// Update the comment
-	updateComment := &github.IssueComment{
-		Body: github.Ptr(updatedBody),
-	}
-
-	updatedComment, _, err := client.Issues.EditComment(ctx, owner, repo, commentID, updateComment)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to update issue comment: %v", err)), nil
-	}
-
-	// Return the updated comment as JSON
-	result, err := json.Marshal(updatedComment)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(string(result)), nil
-}
-
-// updateReviewComment updates a pull request review comment
-func updateReviewComment(ctx context.Context, client *github.Client, owner, repo string, commentID int64, newContent string) (*mcp.CallToolResult, error) {
-	// Get the current review comment
-	comment, _, err := client.PullRequests.GetComment(ctx, owner, repo, commentID)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to get review comment: %v", err)), nil
-	}
-
-	if comment.Body == nil {
-		return mcp.NewToolResultError("comment body is nil"), nil
-	}
-
-	// Replace content between markers
-	updatedBody, err := replaceQoderContent(*comment.Body, newContent)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to replace content: %v", err)), nil
-	}
-
-	// Update the comment
-	updateComment := &github.PullRequestComment{
-		Body: github.Ptr(updatedBody),
-	}
-
-	updatedComment, _, err := client.PullRequests.EditComment(ctx, owner, repo, commentID, updateComment)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to update review comment: %v", err)), nil
-	}
-
-	// Return the updated comment as JSON
-	result, err := json.Marshal(updatedComment)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(string(result)), nil
-}
-
-// replaceQoderContent replaces content between Qoder markers
-func replaceQoderContent(originalBody, newContent string) (string, error) {
-	const startMarker = "<!-- QODER_BODY_START -->"
-	const endMarker = "<!-- QODER_BODY_END -->"
-
-	startIndex := strings.Index(originalBody, startMarker)
-	if startIndex == -1 {
-		return "", fmt.Errorf("start marker '%s' not found", startMarker)
-	}
-
-	endIndex := strings.Index(originalBody, endMarker)
-	if endIndex == -1 {
-		return "", fmt.Errorf("end marker '%s' not found", endMarker)
-	}
-
-	if endIndex <= startIndex {
-		return "", fmt.Errorf("end marker appears before start marker")
-	}
-
-	// Build the new body
-	before := originalBody[:startIndex+len(startMarker)]
-	after := originalBody[endIndex:]
-
-	return before + "\n" + newContent + "\n" + after, nil
 }
 
 // getRequiredStringParam extracts a required string parameter from the request
@@ -837,9 +680,9 @@ func findRootReviewComment(ctx context.Context, client *github.Client, owner, re
 	}
 }
 
-// QoderGetPRDiff creates a tool to get PR diff with enhanced line numbers
-func QoderGetPRDiff(getClient GetClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
-	toolName := "get_pr_diff"
+// GetPullRequestDiff creates a tool to get PR diff with enhanced line numbers and compression
+func GetPullRequestDiff(getClient GetClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
+	toolName := "get_pull_request_diff"
 	description := "Get pull request diff with line numbers showing the latest file state. New lines and context lines show their line numbers, deleted lines don't. Automatically applies compression strategies to reduce diff size when needed."
 
 	return mcp.NewTool(toolName,
@@ -1021,9 +864,9 @@ func parseChunkHeader(header string) (oldStart, oldLines, newStart, newLines int
 	return oldStart, oldLines, newStart, newLines, nil
 }
 
-// QoderGetPRFiles creates a tool to get PR files with enhanced patch content
-func QoderGetPRFiles(getClient GetClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
-	toolName := "get_pr_files"
+// GetPullRequestFiles creates a tool to get PR files with enhanced patch content
+func GetPullRequestFiles(getClient GetClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
+	toolName := "get_pull_request_files"
 	description := "Get the files changed in a pull request. Returns file metadata and enhanced patch content with line numbers. Automatically compresses patch content when needed to avoid context overflow."
 
 	return mcp.NewTool(toolName,
@@ -1118,6 +961,588 @@ func QoderGetPRFiles(getClient GetClientFn, owner, repo string) (mcp.Tool, serve
 			resultJSON, err := json.Marshal(result)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("failed to marshal result: %v", err)), nil
+			}
+
+			return mcp.NewToolResultText(string(resultJSON)), nil
+		}
+}
+
+
+// GetPullRequest creates a tool to get pull request details
+func GetPullRequest(getClient GetClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
+	toolName := "get_pull_request"
+	description := "Get detailed information about a pull request, including title, body, state, author, reviewers, labels, and more."
+
+	return mcp.NewTool(toolName,
+			mcp.WithDescription(description),
+			mcp.WithNumber("pull_number",
+				mcp.Required(),
+				mcp.Description("Pull request number"),
+			),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			// Extract parameters
+			pullNumber, err := getRequiredNumberParam(request, "pull_number")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			// Get GitHub client
+			client, err := getClient(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get GitHub client: %v", err)), nil
+			}
+
+			// Get pull request details from GitHub API
+			pr, _, err := client.PullRequests.Get(ctx, owner, repo, pullNumber)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get PR: %v", err)), nil
+			}
+
+			// Marshal to JSON and return
+			resultJSON, err := json.Marshal(pr)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to marshal PR: %v", err)), nil
+			}
+
+			return mcp.NewToolResultText(string(resultJSON)), nil
+		}
+}
+
+// GetPullRequestComments creates a tool to get all comments on a pull request
+func GetPullRequestComments(getClient GetClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
+	toolName := "get_pull_request_comments"
+	description := "Get all review comments on a pull request. These are inline comments on specific lines of code in the diff."
+
+	return mcp.NewTool(toolName,
+			mcp.WithDescription(description),
+			mcp.WithNumber("pull_number",
+				mcp.Required(),
+				mcp.Description("Pull request number"),
+			),
+			mcp.WithNumber("page",
+				mcp.Description("Page number for pagination (default: 1)"),
+			),
+			mcp.WithNumber("per_page",
+				mcp.Description("Number of items per page (default: 30, max: 100)"),
+			),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			// Extract required parameters
+			pullNumber, err := getRequiredNumberParam(request, "pull_number")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			// Extract optional pagination parameters
+			page := getOptionalNumberParam(request, "page")
+			if page == 0 {
+				page = 1
+			}
+
+			perPage := getOptionalNumberParam(request, "per_page")
+			if perPage == 0 {
+				perPage = 30
+			}
+			if perPage > 100 {
+				perPage = 100
+			}
+
+			// Get GitHub client
+			client, err := getClient(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get GitHub client: %v", err)), nil
+			}
+
+			// Fetch review comments from GitHub API
+			opts := &github.PullRequestListCommentsOptions{
+				ListOptions: github.ListOptions{
+					Page:    page,
+					PerPage: perPage,
+				},
+			}
+
+			comments, resp, err := client.PullRequests.ListComments(ctx, owner, repo, pullNumber, opts)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get PR comments: %v", err)), nil
+			}
+
+			// Create response structure with pagination info
+			result := struct {
+				Comments   []*github.PullRequestComment `json:"comments"`
+				Page       int                          `json:"page"`
+				PerPage    int                          `json:"per_page"`
+				HasNext    bool                         `json:"has_next"`
+				TotalCount int                          `json:"total_count"`
+			}{
+				Comments:   comments,
+				Page:       page,
+				PerPage:    perPage,
+				HasNext:    resp.NextPage > 0,
+				TotalCount: len(comments),
+			}
+
+			// Marshal to JSON and return
+			resultJSON, err := json.Marshal(result)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to marshal comments: %v", err)), nil
+			}
+
+			return mcp.NewToolResultText(string(resultJSON)), nil
+		}
+}
+
+// GetPullRequestReviews creates a tool to get all reviews on a pull request
+func GetPullRequestReviews(getClient GetClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
+	toolName := "get_pull_request_reviews"
+	description := "Get all reviews on a pull request, including review state (APPROVED, CHANGES_REQUESTED, COMMENTED), reviewer, and review body."
+
+	return mcp.NewTool(toolName,
+			mcp.WithDescription(description),
+			mcp.WithNumber("pull_number",
+				mcp.Required(),
+				mcp.Description("Pull request number"),
+			),
+			mcp.WithNumber("page",
+				mcp.Description("Page number for pagination (default: 1)"),
+			),
+			mcp.WithNumber("per_page",
+				mcp.Description("Number of items per page (default: 30, max: 100)"),
+			),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			// Extract required parameters
+			pullNumber, err := getRequiredNumberParam(request, "pull_number")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			// Extract optional pagination parameters
+			page := getOptionalNumberParam(request, "page")
+			if page == 0 {
+				page = 1
+			}
+
+			perPage := getOptionalNumberParam(request, "per_page")
+			if perPage == 0 {
+				perPage = 30
+			}
+			if perPage > 100 {
+				perPage = 100
+			}
+
+			// Get GitHub client
+			client, err := getClient(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get GitHub client: %v", err)), nil
+			}
+
+			// Fetch reviews from GitHub API
+			opts := &github.ListOptions{
+				Page:    page,
+				PerPage: perPage,
+			}
+
+			reviews, resp, err := client.PullRequests.ListReviews(ctx, owner, repo, pullNumber, opts)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get PR reviews: %v", err)), nil
+			}
+
+			// Create response structure with pagination info
+			result := struct {
+				Reviews    []*github.PullRequestReview `json:"reviews"`
+				Page       int                         `json:"page"`
+				PerPage    int                         `json:"per_page"`
+				HasNext    bool                        `json:"has_next"`
+				TotalCount int                         `json:"total_count"`
+			}{
+				Reviews:    reviews,
+				Page:       page,
+				PerPage:    perPage,
+				HasNext:    resp.NextPage > 0,
+				TotalCount: len(reviews),
+			}
+
+			// Marshal to JSON and return
+			resultJSON, err := json.Marshal(result)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to marshal reviews: %v", err)), nil
+			}
+
+			return mcp.NewToolResultText(string(resultJSON)), nil
+		}
+}
+
+// CreateOrUpdateFile creates a tool to create or update a single file in a GitHub repository
+func CreateOrUpdateFile(getClient GetClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
+	toolName := "create_or_update_file"
+	description := "Create or update a single file in a GitHub repository. If updating, you must provide the SHA of the file you want to update."
+
+	return mcp.NewTool(toolName,
+			mcp.WithDescription(description),
+			mcp.WithString("path",
+				mcp.Required(),
+				mcp.Description("Path where to create/update the file"),
+			),
+			mcp.WithString("content",
+				mcp.Required(),
+				mcp.Description("Content of the file"),
+			),
+			mcp.WithString("message",
+				mcp.Required(),
+				mcp.Description("Commit message"),
+			),
+			mcp.WithString("branch",
+				mcp.Required(),
+				mcp.Description("Branch to create/update the file in"),
+			),
+			mcp.WithString("sha",
+				mcp.Description("Required if updating an existing file. The blob SHA of the file being replaced."),
+			),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			// Extract required parameters
+			path, err := getRequiredStringParam(request, "path")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			content, err := getRequiredStringParam(request, "content")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			message, err := getRequiredStringParam(request, "message")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			branch, err := getRequiredStringParam(request, "branch")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			// Get optional SHA parameter
+			sha := request.GetString("sha", "")
+
+			// Get GitHub client
+			client, err := getClient(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get GitHub client: %v", err)), nil
+			}
+
+			// Create the file options
+			contentBytes := []byte(content)
+			opts := &github.RepositoryContentFileOptions{
+				Message: github.Ptr(message),
+				Content: contentBytes,
+				Branch:  github.Ptr(branch),
+			}
+
+			// If SHA is provided, set it (for updates)
+			if sha != "" {
+				opts.SHA = github.Ptr(sha)
+			}
+
+			// Create or update the file
+			fileContent, _, err := client.Repositories.CreateFile(ctx, owner, repo, path, opts)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to create/update file: %v", err)), nil
+			}
+
+			// Marshal to JSON and return
+			resultJSON, err := json.Marshal(fileContent)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
+			}
+
+			return mcp.NewToolResultText(string(resultJSON)), nil
+		}
+}
+
+// PushFiles creates a tool to push multiple files in a single commit to a GitHub repository
+func PushFiles(getClient GetClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
+	toolName := "push_files"
+	description := "Push multiple files to a GitHub repository in a single commit"
+
+	return mcp.NewTool(toolName,
+			mcp.WithDescription(description),
+			mcp.WithString("branch",
+				mcp.Required(),
+				mcp.Description("Branch to push to"),
+			),
+			mcp.WithArray("files",
+				mcp.Required(),
+				mcp.Items(
+					map[string]interface{}{
+						"type":                 "object",
+						"additionalProperties": false,
+						"required":             []string{"path", "content"},
+						"properties": map[string]interface{}{
+							"path": map[string]interface{}{
+								"type":        "string",
+								"description": "path to the file",
+							},
+							"content": map[string]interface{}{
+								"type":        "string",
+								"description": "file content",
+							},
+						},
+					}),
+				mcp.Description("Array of file objects to push, each object with path (string) and content (string)"),
+			),
+			mcp.WithString("message",
+				mcp.Required(),
+				mcp.Description("Commit message"),
+			),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			// Extract required parameters
+			branch, err := getRequiredStringParam(request, "branch")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			message, err := getRequiredStringParam(request, "message")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			// Parse files parameter
+			filesObj, ok := request.GetArguments()["files"].([]interface{})
+			if !ok {
+				return mcp.NewToolResultError("files parameter must be an array of objects with path and content"), nil
+			}
+
+			// Get GitHub client
+			client, err := getClient(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get GitHub client: %v", err)), nil
+			}
+
+			// Get the reference for the branch
+			ref, _, err := client.Git.GetRef(ctx, owner, repo, "refs/heads/"+branch)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get branch reference: %v", err)), nil
+			}
+
+			// Get the commit object that the branch points to
+			baseCommit, _, err := client.Git.GetCommit(ctx, owner, repo, *ref.Object.SHA)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get base commit: %v", err)), nil
+			}
+
+			// Create tree entries for all files
+			var entries []*github.TreeEntry
+
+			for _, file := range filesObj {
+				fileMap, ok := file.(map[string]interface{})
+				if !ok {
+					return mcp.NewToolResultError("each file must be an object with path and content"), nil
+				}
+
+				path, ok := fileMap["path"].(string)
+				if !ok || path == "" {
+					return mcp.NewToolResultError("each file must have a path"), nil
+				}
+
+				content, ok := fileMap["content"].(string)
+				if !ok {
+					return mcp.NewToolResultError("each file must have content"), nil
+				}
+
+				// Create a tree entry for the file
+				entries = append(entries, &github.TreeEntry{
+					Path:    github.Ptr(path),
+					Mode:    github.Ptr("100644"), // Regular file mode
+					Type:    github.Ptr("blob"),
+					Content: github.Ptr(content),
+				})
+			}
+
+			// Create a new tree with the file entries
+			newTree, _, err := client.Git.CreateTree(ctx, owner, repo, *baseCommit.Tree.SHA, entries)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to create tree: %v", err)), nil
+			}
+
+			// Create a new commit
+			commit := &github.Commit{
+				Message: github.Ptr(message),
+				Tree:    newTree,
+				Parents: []*github.Commit{{SHA: baseCommit.SHA}},
+			}
+			newCommit, _, err := client.Git.CreateCommit(ctx, owner, repo, commit, nil)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to create commit: %v", err)), nil
+			}
+
+			// Update the reference to point to the new commit
+			ref.Object.SHA = newCommit.SHA
+			updatedRef, _, err := client.Git.UpdateRef(ctx, owner, repo, ref, false)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to update reference: %v", err)), nil
+			}
+
+			// Marshal to JSON and return
+			resultJSON, err := json.Marshal(updatedRef)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
+			}
+
+			return mcp.NewToolResultText(string(resultJSON)), nil
+		}
+}
+
+// CreateBranch creates a tool to create a new branch in a GitHub repository
+func CreateBranch(getClient GetClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
+	toolName := "create_branch"
+	description := "Create a new branch in a GitHub repository"
+
+	return mcp.NewTool(toolName,
+			mcp.WithDescription(description),
+			mcp.WithString("branch",
+				mcp.Required(),
+				mcp.Description("Name for new branch"),
+			),
+			mcp.WithString("from_branch",
+				mcp.Description("Source branch (defaults to repo default branch)"),
+			),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			// Extract required parameters
+			branch, err := getRequiredStringParam(request, "branch")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			// Get optional from_branch parameter
+			fromBranch := request.GetString("from_branch", "")
+
+			// Get GitHub client
+			client, err := getClient(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get GitHub client: %v", err)), nil
+			}
+
+			// Get the source branch SHA
+			var ref *github.Reference
+
+			if fromBranch == "" {
+				// Get default branch if from_branch not specified
+				repository, _, err := client.Repositories.Get(ctx, owner, repo)
+				if err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("failed to get repository: %v", err)), nil
+				}
+				fromBranch = *repository.DefaultBranch
+			}
+
+			// Get SHA of source branch
+			ref, _, err = client.Git.GetRef(ctx, owner, repo, "refs/heads/"+fromBranch)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get reference: %v", err)), nil
+			}
+
+			// Create new branch
+			newRef := &github.Reference{
+				Ref:    github.Ptr("refs/heads/" + branch),
+				Object: &github.GitObject{SHA: ref.Object.SHA},
+			}
+
+			createdRef, _, err := client.Git.CreateRef(ctx, owner, repo, newRef)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to create branch: %v", err)), nil
+			}
+
+			// Marshal to JSON and return
+			resultJSON, err := json.Marshal(createdRef)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
+			}
+
+			return mcp.NewToolResultText(string(resultJSON)), nil
+		}
+}
+
+// CreatePullRequest creates a tool to create a new pull request
+func CreatePullRequest(getClient GetClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
+	toolName := "create_pull_request"
+	description := "Create a new pull request in a GitHub repository"
+
+	return mcp.NewTool(toolName,
+			mcp.WithDescription(description),
+			mcp.WithString("title",
+				mcp.Required(),
+				mcp.Description("PR title"),
+			),
+			mcp.WithString("head",
+				mcp.Required(),
+				mcp.Description("Branch containing changes"),
+			),
+			mcp.WithString("base",
+				mcp.Required(),
+				mcp.Description("Branch to merge into"),
+			),
+			mcp.WithString("body",
+				mcp.Description("PR description"),
+			),
+			mcp.WithBoolean("draft",
+				mcp.Description("Create as draft PR (default: false)"),
+			),
+			mcp.WithBoolean("maintainer_can_modify",
+				mcp.Description("Allow maintainer edits (default: false)"),
+			),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			// Extract required parameters
+			title, err := getRequiredStringParam(request, "title")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			head, err := getRequiredStringParam(request, "head")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			base, err := getRequiredStringParam(request, "base")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			// Get optional parameters
+			body := request.GetString("body", "")
+			draft := request.GetBool("draft", false)
+			maintainerCanModify := request.GetBool("maintainer_can_modify", false)
+
+			// Get GitHub client
+			client, err := getClient(ctx)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get GitHub client: %v", err)), nil
+			}
+
+			// Create the pull request
+			newPR := &github.NewPullRequest{
+				Title:               github.Ptr(title),
+				Head:                github.Ptr(head),
+				Base:                github.Ptr(base),
+				Draft:               github.Ptr(draft),
+				MaintainerCanModify: github.Ptr(maintainerCanModify),
+			}
+
+			if body != "" {
+				newPR.Body = github.Ptr(body)
+			}
+
+			pr, _, err := client.PullRequests.Create(ctx, owner, repo, newPR)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to create pull request: %v", err)), nil
+			}
+
+			// Marshal to JSON and return
+			resultJSON, err := json.Marshal(pr)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
 			}
 
 			return mcp.NewToolResultText(string(resultJSON)), nil
