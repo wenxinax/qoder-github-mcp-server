@@ -74,7 +74,13 @@ func AddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLClientF
 			// Adjust suggestion indentation if a suggestion block exists
 			var adjustedBody string
 			if params.Line != nil {
-				adjustedBody, err = adjustSuggestionIndentation(ctx, restClient, owner, repo, int(params.PullNumber), params.Path, int(*params.Line), params.Body)
+				// For multi-line comments, use startLine; for single-line comments, use line
+				targetLine := int(*params.Line)
+				if params.StartLine != nil {
+					// Multi-line comment: align to startLine
+					targetLine = int(*params.StartLine)
+				}
+				adjustedBody, err = adjustSuggestionIndentation(ctx, restClient, owner, repo, int(params.PullNumber), params.Path, targetLine, params.Body)
 				if err != nil {
 					// If adjustment fails, log the error and proceed with the original body
 					// This ensures that the comment is still added even if indentation adjustment fails
@@ -186,9 +192,46 @@ func AddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLClientF
 			var addPullRequestReviewThreadMutation struct {
 				AddPullRequestReviewThread struct {
 					Thread struct {
-						ID githubv4.ID // We don't need this, but a selector is required or GQL complains.
+						ID       githubv4.ID
+						Comments struct {
+							Nodes []struct {
+								ID           githubv4.ID
+								Body         githubv4.String
+								Path         githubv4.String
+								Line         *githubv4.Int
+								OriginalLine *githubv4.Int
+							}
+						} `graphql:"comments(first: 1)"`
 					}
 				} `graphql:"addPullRequestReviewThread(input: $input)"`
+			}
+
+			// For single-line LINE comments, GitHub requires both startLine and line to be set
+			// If startLine is not provided but line is, set startLine = line
+			effectiveStartLine := params.StartLine
+			effectiveStartSide := params.StartSide
+
+			if params.SubjectType == "LINE" && params.Line != nil {
+				if params.StartLine == nil {
+					// Single-line comment: set startLine to the same as line
+					effectiveStartLine = params.Line
+					effectiveStartSide = params.Side
+				} else if params.StartLine != nil && *params.Line > *params.StartLine {
+					// Multi-line comment: check if the range is too large (likely spans different chunks)
+					lineSpan := *params.Line - *params.StartLine
+					if lineSpan >= 10 {
+						// Return error for likely cross-chunk multi-line comments
+						errorInfo := map[string]interface{}{
+							"error":      "invalid_multiline_range",
+							"message":    "Multi-line comment range is too large and likely spans different diff chunks. GitHub does not allow comments across different chunks.",
+							"start_line": *params.StartLine,
+							"end_line":   *params.Line,
+							"line_span":  lineSpan,
+						}
+						errorJSON, _ := json.Marshal(errorInfo)
+						return mcp.NewToolResultError(string(errorJSON)), nil
+					}
+				}
 			}
 
 			if err := client.Mutate(
@@ -200,8 +243,8 @@ func AddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLClientF
 					SubjectType:         newGQLStringlikePtr[githubv4.PullRequestReviewThreadSubjectType](&params.SubjectType),
 					Line:                newGQLIntPtr(params.Line),
 					Side:                newGQLStringlikePtr[githubv4.DiffSide](params.Side),
-					StartLine:           newGQLIntPtr(params.StartLine),
-					StartSide:           newGQLStringlikePtr[githubv4.DiffSide](params.StartSide),
+					StartLine:           newGQLIntPtr(effectiveStartLine),
+					StartSide:           newGQLStringlikePtr[githubv4.DiffSide](effectiveStartSide),
 					PullRequestReviewID: &review.ID,
 				},
 				nil,
@@ -209,10 +252,31 @@ func AddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLClientF
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 
-			// Return nothing interesting, just indicate success for the time being.
-			// In future, we may want to return the review ID, but for the moment, we're not leaking
-			// API implementation details to the LLM.
-			return mcp.NewToolResultText("pull request review comment successfully added to pending review"), nil
+			thread := addPullRequestReviewThreadMutation.AddPullRequestReviewThread.Thread
+
+			// Verify mutation succeeded
+			if thread.ID == "" {
+				return mcp.NewToolResultError(fmt.Sprintf(
+					"Failed to create comment thread. The position (path=%s, line=%v, side=%v) may not be valid in the PR diff.",
+					params.Path, params.Line, params.Side)), nil
+			}
+
+			// Build success response
+			result := map[string]interface{}{
+				"thread_id": fmt.Sprintf("%v", thread.ID),
+				"path":      params.Path,
+			}
+
+			if len(thread.Comments.Nodes) > 0 {
+				comment := thread.Comments.Nodes[0]
+				result["comment_id"] = fmt.Sprintf("%v", comment.ID)
+				if comment.Line != nil {
+					result["line"] = int(*comment.Line)
+				}
+			}
+
+			resultJSON, _ := json.Marshal(result)
+			return mcp.NewToolResultText(string(resultJSON)), nil
 		}
 }
 
@@ -312,13 +376,13 @@ func SubmitPendingPullRequestReview(getClient GetClientFn, getGQLClient GetGQLCl
 				return mcp.NewToolResultError(fmt.Sprintf("failed to submit review: %v", err)), nil
 			}
 
-			// Return the submitted review as JSON
-			result, err := json.Marshal(submittedReview)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
+			// Return simplified response
+			result := map[string]interface{}{
+				"review_id": submittedReview.GetID(),
+				"state":     submittedReview.GetState(),
 			}
-
-			return mcp.NewToolResultText(string(result)), nil
+			resultJSON, _ := json.Marshal(result)
+			return mcp.NewToolResultText(string(resultJSON)), nil
 		}
 }
 
@@ -360,13 +424,13 @@ func CreatePendingPullRequestReview(getClient GetClientFn, owner, repo string) (
 				return mcp.NewToolResultError(fmt.Sprintf("failed to create pending review: %v", err)), nil
 			}
 
-			// Return the created review as JSON
-			result, err := json.Marshal(review)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
+			// Return simplified response
+			result := map[string]interface{}{
+				"review_id": review.GetID(),
+				"state":     review.GetState(),
 			}
-
-			return mcp.NewToolResultText(string(result)), nil
+			resultJSON, _ := json.Marshal(result)
+			return mcp.NewToolResultText(string(resultJSON)), nil
 		}
 }
 
@@ -575,13 +639,12 @@ func replyToIssueComment(ctx context.Context, client *github.Client, owner, repo
 		return mcp.NewToolResultError(fmt.Sprintf("failed to create issue comment: %v", err)), nil
 	}
 
-	// Return the created comment as JSON
-	result, err := json.Marshal(createdComment)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
+	// Return simplified response
+	result := map[string]interface{}{
+		"comment_id": createdComment.GetID(),
 	}
-
-	return mcp.NewToolResultText(string(result)), nil
+	resultJSON, _ := json.Marshal(result)
+	return mcp.NewToolResultText(string(resultJSON)), nil
 }
 
 // replyToReviewComment creates a reply to a pull request review comment
@@ -599,13 +662,12 @@ func replyToReviewComment(ctx context.Context, client *github.Client, owner, rep
 		return mcp.NewToolResultError(fmt.Sprintf("failed to create review comment reply: %v", err)), nil
 	}
 
-	// Return the created reply as JSON
-	result, err := json.Marshal(replyComment)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
+	// Return simplified response
+	result := map[string]interface{}{
+		"comment_id": replyComment.GetID(),
 	}
-
-	return mcp.NewToolResultText(string(result)), nil
+	resultJSON, _ := json.Marshal(result)
+	return mcp.NewToolResultText(string(resultJSON)), nil
 }
 
 // updateFullIssueComment updates the full content of an issue comment
@@ -620,13 +682,12 @@ func updateFullIssueComment(ctx context.Context, client *github.Client, owner, r
 		return mcp.NewToolResultError(fmt.Sprintf("failed to update issue comment: %v", err)), nil
 	}
 
-	// Return the updated comment as JSON
-	result, err := json.Marshal(updatedComment)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
+	// Return simplified response
+	result := map[string]interface{}{
+		"comment_id": updatedComment.GetID(),
 	}
-
-	return mcp.NewToolResultText(string(result)), nil
+	resultJSON, _ := json.Marshal(result)
+	return mcp.NewToolResultText(string(resultJSON)), nil
 }
 
 // updateFullReviewComment updates the full content of a review comment
@@ -641,13 +702,12 @@ func updateFullReviewComment(ctx context.Context, client *github.Client, owner, 
 		return mcp.NewToolResultError(fmt.Sprintf("failed to update review comment: %v", err)), nil
 	}
 
-	// Return the updated comment as JSON
-	result, err := json.Marshal(updatedComment)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal response: %v", err)), nil
+	// Return simplified response
+	result := map[string]interface{}{
+		"comment_id": updatedComment.GetID(),
 	}
-
-	return mcp.NewToolResultText(string(result)), nil
+	resultJSON, _ := json.Marshal(result)
+	return mcp.NewToolResultText(string(resultJSON)), nil
 }
 
 // findRootReviewComment finds the root (top-level) comment of a review comment thread
