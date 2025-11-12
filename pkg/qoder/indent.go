@@ -94,13 +94,15 @@ func adjustSuggestionIndentation(ctx context.Context, client *github.Client, own
 
 	// Use the new independent methods for indentation adjustment
 	baseIndentation := detectBaseIndentation(suggestion)
-	if baseIndentation == "" {
-		// No indentation to adjust
-		return body, nil
-	}
 
-	// Step 1: Remove base indentation
-	unindentedSuggestion := removeBaseIndentation(suggestion, baseIndentation)
+	// Step 1: Remove base indentation (if any)
+	var unindentedSuggestion string
+	if baseIndentation != "" {
+		unindentedSuggestion = removeBaseIndentation(suggestion, baseIndentation)
+	} else {
+		// No base indentation to remove, use suggestion as-is
+		unindentedSuggestion = suggestion
+	}
 
 	// Step 2: Apply target indentation
 	adjustedSuggestion := applyBaseIndentation(unindentedSuggestion, correctIndentation)
