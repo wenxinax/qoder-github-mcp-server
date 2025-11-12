@@ -35,8 +35,6 @@ type QoderFixContext struct {
 	Body       string `json:"body"`
 }
 
-
-
 // AddCommentToPendingReview creates a tool to add a review comment to a pending review
 func AddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
 	toolName := "add_comment_to_pending_review"
@@ -55,13 +53,13 @@ func AddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLClientF
 		),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params struct {
-				PullNumber  int32  `mapstructure:"pull_number"`
-				Path        string `mapstructure:"path"`
-				Body        string `mapstructure:"body"`
-				SubjectType string `mapstructure:"subjectType"`
-				Line        *int32 `mapstructure:"line"`
+				PullNumber  int32   `mapstructure:"pull_number"`
+				Path        string  `mapstructure:"path"`
+				Body        string  `mapstructure:"body"`
+				SubjectType string  `mapstructure:"subjectType"`
+				Line        *int32  `mapstructure:"line"`
 				Side        *string `mapstructure:"side"`
-				StartLine   *int32 `mapstructure:"startLine"`
+				StartLine   *int32  `mapstructure:"startLine"`
 				StartSide   *string `mapstructure:"startSide"`
 			}
 			if err := mapstructure.Decode(request.Params.Arguments, &params); err != nil {
@@ -116,7 +114,7 @@ func AddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLClientF
 								State githubv4.PullRequestReviewState
 								URL   githubv4.URI
 							}
-						} `graphql:"reviews(first: 1, author: $author)"`
+						} `graphql:"reviews(first: 1, author: $author, states: PENDING)"`
 					} `graphql:"pullRequest(number: $prNum)"`
 				} `graphql:"repository(owner: $owner, name: $name)"`
 			}
@@ -966,7 +964,6 @@ func GetPullRequestFiles(getClient GetClientFn, owner, repo string) (mcp.Tool, s
 			return mcp.NewToolResultText(string(resultJSON)), nil
 		}
 }
-
 
 // GetPullRequest creates a tool to get pull request details
 func GetPullRequest(getClient GetClientFn, owner, repo string) (mcp.Tool, server.ToolHandlerFunc) {
