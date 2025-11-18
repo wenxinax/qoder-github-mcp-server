@@ -45,22 +45,22 @@ func AddCommentToPendingReview(getClient GetClientFn, getGQLClient GetGQLClientF
 			mcp.WithString("body", mcp.Required(), mcp.Description("The text of the review comment")),
 			mcp.WithString("path", mcp.Required(), mcp.Description("The relative path to the file that necessitates a comment")),
 			mcp.WithNumber("pull_number", mcp.Required(), mcp.Description("Pull request number")),
-			mcp.WithString("subjectType", mcp.Required(), mcp.Description("The level at which the comment is targeted"), mcp.Enum("FILE", "LINE")),
+			mcp.WithString("subject_type", mcp.Required(), mcp.Description("The level at which the comment is targeted"), mcp.Enum("FILE", "LINE")),
 			mcp.WithNumber("line", mcp.Description("The line of the blob in the pull request diff that the comment applies to. For multi-line comments, the last line of the range")),
 			mcp.WithString("side", mcp.Description("The side of the diff to comment on. LEFT indicates the previous state, RIGHT indicates the new state"), mcp.Enum("LEFT", "RIGHT")),
-			mcp.WithNumber("startLine", mcp.Description("For multi-line comments, the first line of the range that the comment applies to")),
-			mcp.WithString("startSide", mcp.Description("For multi-line comments, the starting side of the diff that the comment applies to. LEFT indicates the previous state, RIGHT indicates the new state"), mcp.Enum("LEFT", "RIGHT")),
+			mcp.WithNumber("start_line", mcp.Description("For multi-line comments, the first line of the range that the comment applies to")),
+			mcp.WithString("start_side", mcp.Description("For multi-line comments, the starting side of the diff that the comment applies to. LEFT indicates the previous state, RIGHT indicates the new state"), mcp.Enum("LEFT", "RIGHT")),
 		),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params struct {
 				PullNumber  int32   `mapstructure:"pull_number"`
 				Path        string  `mapstructure:"path"`
 				Body        string  `mapstructure:"body"`
-				SubjectType string  `mapstructure:"subjectType"`
+				SubjectType string  `mapstructure:"subject_type"`
 				Line        *int32  `mapstructure:"line"`
 				Side        *string `mapstructure:"side"`
-				StartLine   *int32  `mapstructure:"startLine"`
-				StartSide   *string `mapstructure:"startSide"`
+				StartLine   *int32  `mapstructure:"start_line"`
+				StartSide   *string `mapstructure:"start_side"`
 			}
 			if err := mapstructure.Decode(request.Params.Arguments, &params); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
