@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/qoder/qoder-github-mcp-server/internal/qmcp"
 	"github.com/spf13/cobra"
@@ -33,21 +34,27 @@ var (
 				return errors.New("GITHUB_TOKEN not set")
 			}
 
-			owner := viper.GetString("github_owner")
-			if owner == "" {
-				return errors.New("GITHUB_OWNER not set")
+			// Parse GITHUB_REPOSITORY (format: owner/repo)
+			repository := viper.GetString("github_repository")
+			if repository == "" {
+				return errors.New("GITHUB_REPOSITORY not set")
+			}
+			parts := strings.Split(repository, "/")
+			if len(parts) != 2 {
+				return fmt.Errorf("GITHUB_REPOSITORY must be in format 'owner/repo', got: %s", repository)
 			}
 
-			repo := viper.GetString("github_repo")
-			if repo == "" {
-				return errors.New("GITHUB_REPO not set")
-			}
+			// Get optional GitHub Actions context
+			runID := viper.GetString("github_run_id")
+			serverURL := viper.GetString("github_server_url")
 
 			stdioServerConfig := qmcp.StdioServerConfig{
-				Version: version,
-				Token:   token,
-				Owner:   owner,
-				Repo:    repo,
+				Version:   version,
+				Token:     token,
+				Owner:     parts[0],
+				Repo:      parts[1],
+				RunID:     runID,
+				ServerURL: serverURL,
 			}
 			return qmcp.RunStdioServer(stdioServerConfig)
 		},
@@ -67,8 +74,9 @@ func initConfig() {
 
 	// Bind environment variables
 	viper.BindEnv("github_token", "GITHUB_TOKEN")
-	viper.BindEnv("github_owner", "GITHUB_OWNER")
-	viper.BindEnv("github_repo", "GITHUB_REPO")
+	viper.BindEnv("github_repository", "GITHUB_REPOSITORY")
+	viper.BindEnv("github_run_id", "GITHUB_RUN_ID")
+	viper.BindEnv("github_server_url", "GITHUB_SERVER_URL")
 }
 
 func main() {

@@ -10,7 +10,7 @@ import (
 )
 
 // NewServer creates a new Qoder MCP server with the specified configuration
-func NewServer(version, token, owner, repo string) *server.MCPServer {
+func NewServer(version, token, owner, repo, runID, serverURL string) *server.MCPServer {
 	// Create a new MCP server
 	s := server.NewMCPServer(
 		"qoder-github-mcp-server",
@@ -35,13 +35,13 @@ func NewServer(version, token, owner, repo string) *server.MCPServer {
 	}
 
 	// Register tools
-	registerTools(s, getClient, getGQLClient, owner, repo)
+	registerTools(s, getClient, getGQLClient, owner, repo, runID, serverURL)
 
 	return s
 }
 
 // registerTools registers all available tools with the MCP server
-func registerTools(s *server.MCPServer, getClient GetClientFn, getGQLClient GetGQLClientFn, owner, repo string) {
+func registerTools(s *server.MCPServer, getClient GetClientFn, getGQLClient GetGQLClientFn, owner, repo, runID, serverURL string) {
 	// Register the add review line comment tool
 	addCommentTool, addCommentHandler := AddCommentToPendingReview(getClient, getGQLClient, owner, repo)
 	s.AddTool(addCommentTool, addCommentHandler)
@@ -51,15 +51,15 @@ func registerTools(s *server.MCPServer, getClient GetClientFn, getGQLClient GetG
 	s.AddTool(createReviewTool, createReviewHandler)
 
 	// Register the submit pending review tool
-	submitReviewTool, submitReviewHandler := SubmitPendingPullRequestReview(getClient, getGQLClient, owner, repo)
+	submitReviewTool, submitReviewHandler := SubmitPendingPullRequestReview(getClient, getGQLClient, owner, repo, runID, serverURL)
 	s.AddTool(submitReviewTool, submitReviewHandler)
 
 	// Register the reply comment tool
-	replyCommentTool, replyCommentHandler := ReplyComment(getClient, owner, repo)
+	replyCommentTool, replyCommentHandler := ReplyComment(getClient, owner, repo, runID, serverURL)
 	s.AddTool(replyCommentTool, replyCommentHandler)
 
 	// Register the update comment tool
-	updateCommentTool, updateCommentHandler := UpdateComment(getClient, owner, repo)
+	updateCommentTool, updateCommentHandler := UpdateComment(getClient, owner, repo, runID, serverURL)
 	s.AddTool(updateCommentTool, updateCommentHandler)
 
 	// Register the get PR diff tool (with line numbers and compression)

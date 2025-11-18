@@ -9,8 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/qoder/qoder-github-mcp-server/pkg/qoder"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/qoder/qoder-github-mcp-server/pkg/qoder"
 	"github.com/sirupsen/logrus"
 )
 
@@ -26,6 +26,12 @@ type StdioServerConfig struct {
 
 	// GitHub repository name
 	Repo string
+
+	// GitHub Actions workflow run ID
+	RunID string
+
+	// GitHub server URL
+	ServerURL string
 }
 
 // RunStdioServer starts the MCP server with stdio transport
@@ -35,7 +41,7 @@ func RunStdioServer(cfg StdioServerConfig) error {
 	defer stop()
 
 	// Create the MCP server
-	qoderServer := qoder.NewServer(cfg.Version, cfg.Token, cfg.Owner, cfg.Repo)
+	qoderServer := qoder.NewServer(cfg.Version, cfg.Token, cfg.Owner, cfg.Repo, cfg.RunID, cfg.ServerURL)
 
 	// Create stdio server
 	stdioServer := server.NewStdioServer(qoderServer)
