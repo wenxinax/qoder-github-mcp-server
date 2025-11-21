@@ -15,6 +15,7 @@ OS_ARCHES          ?= darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/
 CGO_ENABLED        ?= 0
 GO_BUILD_TAGS      ?=
 GO                 ?= go
+TAR                ?= tar
 
 # Version metadata (VERSION can be overridden: `make package VERSION=1.2.3`)
 VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
@@ -95,7 +96,7 @@ package: ## 构建所有平台的发布包（tar.gz / zip）
 		if [ "$${archive_ext}" = "zip" ]; then \
 			( cd "$(DIST_DIR)" && zip -rq "$${basename}.zip" "$${basename}" ); \
 		else \
-			( cd "$(DIST_DIR)" && tar -czf "$${basename}.tar.gz" "$${basename}" ); \
+			( cd "$(DIST_DIR)" && COPYFILE_DISABLE=1 $(TAR) -czf "$${basename}.tar.gz" "$${basename}" ); \
 		fi; \
 		rm -rf "$${tmp_dir}"; \
 	done
